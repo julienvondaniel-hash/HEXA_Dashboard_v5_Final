@@ -30,7 +30,7 @@ def call_with_search(client, prompt: str, max_tokens: int = 2000) -> str:
     messages = [{"role": "user", "content": prompt}]
     for _ in range(20):
         response = client.messages.create(
-            model="claude-sonnet-4-5",
+            model="claude-opus-4-5",
             max_tokens=max_tokens,
             tools=tools,
             messages=messages)
@@ -54,7 +54,7 @@ def call_with_search(client, prompt: str, max_tokens: int = 2000) -> str:
 
 def call_simple(client, prompt: str) -> str:
     response = client.messages.create(
-        model="claude-sonnet-4-5",
+        model="claude-opus-4-5",
         max_tokens=2000,
         messages=[{"role": "user", "content": prompt}])
     return response.content[0].text
