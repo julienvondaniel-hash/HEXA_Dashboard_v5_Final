@@ -113,7 +113,7 @@ Recherche :
 
     # Délai entre les passes
     print("  Pause 60s (rate limit)...")
-    time.sleep(60)
+    time.sleep(90)
 
     # ── Passe 2 : Immobilier, PE, SCPI ───────────────────────────────────────
     prompt2 = f"""Recherche ces données pour {mois} {annee}.
@@ -353,7 +353,7 @@ def get_claude_analysis(data: dict) -> tuple:
 
         # 3. Délai avant analyse
         print("  Pause 60s avant analyse...")
-        time.sleep(60)
+        time.sleep(90)
 
         # 4. Analyse
         print("  Analyse Claude...")
