@@ -112,8 +112,8 @@ Recherche :
         print(f"  Passe 1 echouee: {e}")
 
     # Délai entre les passes
-    print("  Pause 30s (rate limit)...")
-    time.sleep(30)
+    print("  Pause 60s (rate limit)...")
+    time.sleep(60)
 
     # ── Passe 2 : Immobilier, PE, SCPI ───────────────────────────────────────
     prompt2 = f"""Recherche ces données pour {mois} {annee}.
@@ -352,8 +352,8 @@ def get_claude_analysis(data: dict) -> tuple:
         _inject_dynamic(data, dynamic)
 
         # 3. Délai avant analyse
-        print("  Pause 30s avant analyse...")
-        time.sleep(30)
+        print("  Pause 60s avant analyse...")
+        time.sleep(60)
 
         # 4. Analyse
         print("  Analyse Claude...")
