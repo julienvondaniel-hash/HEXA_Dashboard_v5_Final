@@ -15,6 +15,20 @@ from reportlab.platypus import (Paragraph, Spacer, Table, TableStyle,
                                  PageTemplate, Frame)
 from reportlab.lib.enums import TA_CENTER
 
+# Couleurs et mappings cycle économique
+REGIME_COLORS = {
+    "Surchauffe": colors.HexColor("#D35400"),
+    "Goldilocks": colors.HexColor("#1A7F4B"),
+    "Obligations": colors.HexColor("#2471A3"),
+    "Stagflation": colors.HexColor("#C0392B"),
+}
+ALLOC_MAP = {
+    "Surchauffe":   "Actions Value, Mat. premieres, Immo",
+    "Goldilocks":   "Actions toutes classes, Croissance",
+    "Obligations":  "Duration, Obligations souveraines",
+    "Stagflation":  "Or, OATi, Cash, Monetaire",
+}
+
 NAVY       = colors.HexColor("#1B2B4B")
 NAVY_LIGHT = colors.HexColor("#2A3F6F")
 TURQUOISE  = colors.HexColor("#4ABFBF")
