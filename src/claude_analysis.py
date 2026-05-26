@@ -1,10 +1,11 @@
 """
 Appel API Claude avec web_search pour collecter toutes les données dynamiques
 et produire l'analyse mensuelle complète.
-Divisé en 2 passes pour éviter les timeouts.
+Divisé en 2 passes avec délais pour éviter les rate limits.
 """
 import os
 import json
+import time
 import datetime
 import anthropic
 
@@ -26,7 +27,7 @@ def extract_json(text: str) -> dict:
     return json.loads(text)
 
 
-def call_with_search(client, prompt: str, max_tokens: int = 4000) -> str:
+def call_with_search(client, prompt: str, max_tokens: int = 3000) -> str:
     tools    = [{"type": "web_search_20250305", "name": "web_search"}]
     messages = [{"role": "user", "content": prompt}]
     for _ in range(20):
@@ -56,18 +57,18 @@ def call_with_search(client, prompt: str, max_tokens: int = 4000) -> str:
 def call_simple(client, prompt: str) -> str:
     response = client.messages.create(
         model="claude-sonnet-4-5",
-        max_tokens=2500,
+        max_tokens=2000,
         messages=[{"role": "user", "content": prompt}])
     return response.content[0].text
 
 
 def fetch_all_dynamic_data(client, mois: str, annee: int) -> dict:
-    """Recherche web en 2 passes pour éviter les timeouts."""
+    """Recherche web en 2 passes avec délai pour éviter les rate limits."""
     result = {}
 
-    # ── Passe 1 : Macro (PMI, Chine, CPI flash, spreads) ─────────────────────
+    # ── Passe 1 : Macro ───────────────────────────────────────────────────────
     prompt1 = f"""Recherche ces données économiques pour {mois} {annee}.
-Utilise web_search pour chaque donnée. Réponds UNIQUEMENT avec ce JSON :
+Utilise web_search. Réponds UNIQUEMENT avec ce JSON :
 {{
   "pmi": {{
     "france": {{"val":"","period":"","prev":"","source":""}},
@@ -92,13 +93,13 @@ Utilise web_search pour chaque donnée. Réponds UNIQUEMENT avec ce JSON :
   }}
 }}
 
-Données à rechercher :
+Recherche :
 1. PMI composites S&P Global/HCOB/Caixin dernier mois {annee}
-2. PIB et CPI Chine dernières données {annee} (Reuters, Les Echos, AFP)
-3. CPI flash France et Zone Euro {mois} {annee} (INSEE, Eurostat)
-4. Spread OAT/Bund 10 ans aujourd'hui (Banque de France, Les Echos)
+2. PIB et CPI Chine {annee} (Reuters, Les Echos)
+3. CPI flash France et Zone Euro {mois} {annee}
+4. Spread OAT/Bund 10 ans aujourd'hui
 5. Spread courbe US 2ans/10ans aujourd'hui
-6. Spreads crédit IG et HY (FRED ou presse financière)"""
+6. Spreads credit IG et HY"""
 
     try:
         print("  Passe 1 (macro)...")
@@ -110,9 +111,13 @@ Données à rechercher :
     except Exception as e:
         print(f"  Passe 1 echouee: {e}")
 
+    # Délai entre les passes
+    print("  Pause 30s (rate limit)...")
+    time.sleep(30)
+
     # ── Passe 2 : Immobilier, PE, SCPI ───────────────────────────────────────
     prompt2 = f"""Recherche ces données pour {mois} {annee}.
-Utilise web_search pour chaque donnée. Réponds UNIQUEMENT avec ce JSON :
+Utilise web_search. Réponds UNIQUEMENT avec ce JSON :
 {{
   "immo_taux": {{
     "taux_20ans":"","taux_20ans_prev":"","taux_20ans_n1":"",
@@ -167,22 +172,20 @@ Utilise web_search pour chaque donnée. Réponds UNIQUEMENT avec ce JSON :
   }}
 }}
 
-Données à rechercher :
-1. Taux crédit immobilier 20 ans France {mois} {annee} (CAFPI, Meilleurtaux, Banque de France)
-2. Bureaux vacants IDF et surfaces commerciales France (CBRE, JLL, BNP Paribas RE)
-3. Prix immobilier m2 : Paris, Lyon, Tassin-la-Demi-Lune, Saint-Foy-les-Lyon,
+Recherche :
+1. Taux credit immobilier 20 ans France {mois} {annee} (CAFPI, Meilleurtaux)
+2. Bureaux vacants IDF et commerces France (CBRE, JLL)
+3. Prix m2 : Paris, Lyon, Tassin-la-Demi-Lune, Saint-Foy-les-Lyon,
    Maisons-Laffitte, Le Vesinet, Chatou, Saint-Germain-en-Laye
-   (source : DVF data.gouv.fr, MeilleursAgents, notaires, SeLoger)
-4. Indice Argos Mid-Market dernier trimestre {annee} (argos-wityu.com)
-5. France Invest dernières données {annee} (france-invest.fr)
-6. Dry Powder PE mondial dernière estimation {annee} (Bain, Preqin)
-7. SCPI marché France {annee} : TD moyen marché, collecte nette, décote secondaire,
-   TOF moyen, tendances par secteur, 5 SCPI de référence avec leurs indicateurs
-   (source : ASPIM, MeilleuresSCPI.com, France SCPI, L'AGEFI)"""
+4. Indice Argos Mid-Market {annee} (argos-wityu.com)
+5. France Invest {annee} (france-invest.fr)
+6. Dry Powder PE mondial {annee}
+7. SCPI marche France {annee} : TD moyen, collecte, decote, TOF,
+   secteurs, 5 SCPI phares (ASPIM, MeilleuresSCPI.com)"""
 
     try:
         print("  Passe 2 (immo/PE/SCPI)...")
-        text2 = call_with_search(client, prompt2, max_tokens=4000)
+        text2 = call_with_search(client, prompt2, max_tokens=3000)
         if text2:
             r2 = extract_json(text2)
             result.update(r2)
@@ -216,22 +219,21 @@ def build_analysis_prompt(data: dict, mois: str) -> str:
     return f"""Tu es conseiller en gestion de patrimoine senior chez HEXA Patrimoine.
 Analyse les données économiques de {mois} et produis une analyse professionnelle.
 
-DONNEES DU MOIS :
+DONNEES :
 PIB : France {v("gdp_fr.val")} | Zone Euro {v("gdp_ez.val")} | USA {v("gdp_usa.val")} | Chine {v("gdp_chine.val")}
 PMI : France {v("pmi.france.val")} | Zone Euro {v("pmi.ez.val")} | USA {v("pmi.usa.val")} | Chine {v("pmi.chine.val")}
-EMPLOI USA : NFP {v("nfp.val")} | Chomage {v("unemployment_usa.val")}
-INFLATION : France {v("cpi_fr.val")} | Zone Euro {v("cpi_ez.val")} | USA {v("cpi_usa.val")} | Chine {v("cpi_chine.val")}
-TAUX : BCE {v("ecb_rate.val")} | Fed {v("fed_rate.val")} | Euribor 3M {v("euribor.val")}
-STRESS : VIX {v("vix.val")} | Fear&Greed {v("fg.val")}/100 | Spread OAT/Bund {v("spread.spread")}pb
-COURBE US : {sc.get("spread","N/D")} ({sc.get("signal","N/D")})
-CREDIT : IG {cs.get("ig_spread","N/D")} | HY {cs.get("hy_spread","N/D")}
-MARCHES : CAC 40 ({cac_p:+.1f}% 1an) | S&P 500 ({sp_p:+.1f}% 1an)
-MATIERES 1ERES : Or {v("commodities.Or.val")}$/oz | Brent {v("commodities.Brent.val")}$/b
-SCPI : TD moyen {v("scpi.marche.td_moyen")} | Collecte {v("scpi.marche.collecte_nette")}
+NFP {v("nfp.val")} | Chomage {v("unemployment_usa.val")}
+Inflation : France {v("cpi_fr.val")} | ZE {v("cpi_ez.val")} | USA {v("cpi_usa.val")} | Chine {v("cpi_chine.val")}
+Taux : BCE {v("ecb_rate.val")} | Fed {v("fed_rate.val")} | Euribor {v("euribor.val")}
+VIX {v("vix.val")} | F&G {v("fg.val")}/100 | OAT/Bund {v("spread.spread")}pb
+Courbe US : {sc.get("spread","N/D")} ({sc.get("signal","N/D")})
+Credit : IG {cs.get("ig_spread","N/D")} | HY {cs.get("hy_spread","N/D")}
+CAC 40 {cac_p:+.1f}%/an | S&P 500 {sp_p:+.1f}%/an
+SCPI : TD {v("scpi.marche.td_moyen")} | Collecte {v("scpi.marche.collecte_nette")}
 
-Reponds UNIQUEMENT avec ce JSON (sans texte avant ou apres) :
+Reponds UNIQUEMENT avec ce JSON :
 {{
-  "commentaire_general": "2-3 phrases contexte macro professionnel HEXA.",
+  "commentaire_general": "2-3 phrases contexte macro HEXA.",
   "analyse_cycle": {{
     "France":          {{"regime": "Goldilocks|Surchauffe|Obligations|Stagflation", "commentaire": "1 phrase"}},
     "Etats-Unis":      {{"regime": "...", "commentaire": "..."}},
@@ -241,111 +243,89 @@ Reponds UNIQUEMENT avec ce JSON (sans texte avant ou apres) :
     "Asie ex-Chine":   {{"regime": "...", "commentaire": "..."}}
   }},
   "points_vigilance": ["risque 1", "risque 2", "risque 3"],
-  "opportunites":     ["opportunite 1", "opportunite 2", "opportunite 3"],
+  "opportunites":     ["opp 1", "opp 2", "opp 3"],
   "allocation_recommandee": {{
-    "actions": "1 phrase", "obligations": "1 phrase",
-    "matieres_premieres": "1 phrase", "immobilier": "1 phrase",
-    "cash_monetaire": "1 phrase", "private_equity": "1 phrase",
-    "scpi": "1 phrase sur les SCPI"
+    "actions":"1 phrase","obligations":"1 phrase",
+    "matieres_premieres":"1 phrase","immobilier":"1 phrase",
+    "cash_monetaire":"1 phrase","private_equity":"1 phrase","scpi":"1 phrase"
   }},
-  "synthese_immobilier": "2 phrases contexte immo France.",
-  "synthese_pe":         "2 phrases contexte PE.",
-  "synthese_scpi":       "2 phrases contexte SCPI marche.",
-  "analyse_courbe_taux": "1 phrase sur l'inversion courbe US et implications.",
-  "analyse_credit":      "1 phrase sur les spreads IG/HY et implications."
+  "synthese_immobilier":"2 phrases.",
+  "synthese_pe":"2 phrases.",
+  "synthese_scpi":"2 phrases.",
+  "analyse_courbe_taux":"1 phrase.",
+  "analyse_credit":"1 phrase."
 }}"""
 
 
 def _inject_dynamic(data: dict, dynamic: dict):
     if not dynamic: return
 
-    # PMI
     if "pmi" in dynamic:
         for zone in ["france","usa","ez","chine"]:
             if zone in dynamic["pmi"] and dynamic["pmi"][zone].get("val"):
                 data["pmi"][zone].update(dynamic["pmi"][zone])
 
-    # CPI flash (priorité sur données Eurostat si disponibles)
     if "cpi_flash" in dynamic:
         cf = dynamic["cpi_flash"]
         if cf.get("france_val"):
-            data["cpi_fr"].update({
-                "val":    cf["france_val"],
-                "period": cf.get("france_period","N/D"),
-                "prev":   cf.get("france_prev","N/D"),
-                "source": cf.get("france_source","INSEE flash")})
+            data["cpi_fr"].update({"val":cf["france_val"],"period":cf.get("france_period","N/D"),
+                                    "prev":cf.get("france_prev","N/D"),"source":cf.get("france_source","INSEE flash")})
         if cf.get("ez_val"):
-            data["cpi_ez"].update({
-                "val":    cf["ez_val"],
-                "period": cf.get("ez_period","N/D"),
-                "prev":   cf.get("ez_prev","N/D"),
-                "source": cf.get("ez_source","Eurostat flash")})
+            data["cpi_ez"].update({"val":cf["ez_val"],"period":cf.get("ez_period","N/D"),
+                                    "prev":cf.get("ez_prev","N/D"),"source":cf.get("ez_source","Eurostat flash")})
 
-    # Chine
     if "chine" in dynamic:
         c = dynamic["chine"]
         if c.get("pib_val"):
-            data["gdp_chine"] = {
-                "val": c.get("pib_val","N/D"), "period": c.get("pib_period","N/D"),
-                "prev": c.get("pib_prev","N/D"), "prev_period": c.get("pib_prev_period","N/D"),
-                "n1":"N/D","n1_period":"N/D","source":"NBS via web_search"}
+            data["gdp_chine"]={"val":c.get("pib_val","N/D"),"period":c.get("pib_period","N/D"),
+                               "prev":c.get("pib_prev","N/D"),"prev_period":c.get("pib_prev_period","N/D"),
+                               "n1":"N/D","n1_period":"N/D","source":"NBS via web_search"}
         if c.get("cpi_val"):
-            data["cpi_chine"] = {
-                "val": c.get("cpi_val","N/D"), "period": c.get("cpi_period","N/D"),
-                "prev": c.get("cpi_prev","N/D"), "prev_period": c.get("cpi_prev_period","N/D"),
-                "n1":"N/D","n1_period":"N/D","source":"NBS via web_search"}
+            data["cpi_chine"]={"val":c.get("cpi_val","N/D"),"period":c.get("cpi_period","N/D"),
+                               "prev":c.get("cpi_prev","N/D"),"prev_period":c.get("cpi_prev_period","N/D"),
+                               "n1":"N/D","n1_period":"N/D","source":"NBS via web_search"}
         if c.get("pboc_val"):
-            data["pboc"] = {
-                "val": c.get("pboc_val","N/D"), "prev": c.get("pboc_prev","N/D"),
-                "detail": c.get("pboc_detail","LPR 1 an"), "source":"PBoC via web_search"}
+            data["pboc"]={"val":c.get("pboc_val","N/D"),"prev":c.get("pboc_prev","N/D"),
+                          "detail":c.get("pboc_detail","LPR 1 an"),"source":"PBoC via web_search"}
 
-    # Taux immo et marché
     if "immo_taux" in dynamic and dynamic["immo_taux"].get("taux_20ans"):
         it = dynamic["immo_taux"]
         data["immobilier_taux"].update({k:v for k,v in it.items() if v})
 
-    # Prix immo
     if "immo_prix" in dynamic:
-        valid = {k:v for k,v in dynamic["immo_prix"].items() if v.get("val",0)>0}
-        if valid: data["immo_prix"] = valid
+        valid={k:v for k,v in dynamic["immo_prix"].items() if v.get("val",0)>0}
+        if valid: data["immo_prix"]=valid
 
-    # PE
     pe = data.get("private_equity",{})
     if "argos" in dynamic and dynamic["argos"].get("val"):
-        a = dynamic["argos"]
-        pe["argos"] = (a.get("val","N/D"), a.get("prev","N/D"), a.get("prev_period","N/D"),
-                       a.get("n1","N/D"), a.get("n1_period","N/D"))
+        a=dynamic["argos"]
+        pe["argos"]=(a.get("val","N/D"),a.get("prev","N/D"),a.get("prev_period","N/D"),
+                     a.get("n1","N/D"),a.get("n1_period","N/D"))
     if "france_invest" in dynamic:
-        fi = dynamic["france_invest"]
+        fi=dynamic["france_invest"]
         for key in ["levees","invest","cessions","nb_ent","rdt"]:
             if key in fi and fi[key].get("val"):
-                d = fi[key]
-                pe[key] = (d.get("val","N/D"), d.get("var",""), d.get("periode",""))
+                d=fi[key]; pe[key]=(d.get("val","N/D"),d.get("var",""),d.get("periode",""))
     if "dry_powder" in dynamic and dynamic["dry_powder"].get("val"):
-        dp = dynamic["dry_powder"]
-        pe["dp"] = (dp.get("val","N/D"), dp.get("var",""), dp.get("periode",""))
+        dp=dynamic["dry_powder"]
+        pe["dp"]=(dp.get("val","N/D"),dp.get("var",""),dp.get("periode",""))
 
-    # Spread OAT/Bund
     if "spread_oat_bund" in dynamic and dynamic["spread_oat_bund"].get("oat"):
-        sp = dynamic["spread_oat_bund"]
-        data["spread"] = {
-            "spread": sp.get("spread","N/D"), "spread_prev": sp.get("spread_prev","N/D"),
-            "oat": sp.get("oat","N/D"), "bund": sp.get("bund","N/D"),
-            "source": sp.get("source","web_search")}
+        sp=dynamic["spread_oat_bund"]
+        data["spread"]={"spread":sp.get("spread","N/D"),"spread_prev":sp.get("spread_prev","N/D"),
+                        "oat":sp.get("oat","N/D"),"bund":sp.get("bund","N/D"),
+                        "source":sp.get("source","web_search")}
 
-    # Credit spreads (si FRED a échoué)
     if "credit_spreads" in dynamic and dynamic["credit_spreads"].get("ig_spread"):
-        cs = dynamic["credit_spreads"]
-        if data.get("credit_spreads",{}).get("ig_spread","N/D") == "N/D":
+        cs=dynamic["credit_spreads"]
+        if data.get("credit_spreads",{}).get("ig_spread","N/D")=="N/D":
             data["credit_spreads"].update(cs)
 
-    # Courbe US (si Yahoo a échoué)
     if "spread_us_curve" in dynamic and dynamic["spread_us_curve"].get("spread"):
-        uc = dynamic["spread_us_curve"]
-        if data.get("spread_us_curve",{}).get("spread","N/D") == "N/D":
+        uc=dynamic["spread_us_curve"]
+        if data.get("spread_us_curve",{}).get("spread","N/D")=="N/D":
             data["spread_us_curve"].update(uc)
 
-    # SCPI
     if "scpi" in dynamic and dynamic["scpi"].get("marche",{}).get("td_moyen"):
         data["scpi"].update(dynamic["scpi"])
 
@@ -365,13 +345,17 @@ def get_claude_analysis(data: dict) -> tuple:
     try:
         client = anthropic.Anthropic(api_key=api_key)
 
-        # 1. Recherche web (2 passes)
+        # 1. Recherche web (2 passes avec délai)
         dynamic = fetch_all_dynamic_data(client, mois, annee)
 
         # 2. Injecter dans data
         _inject_dynamic(data, dynamic)
 
-        # 3. Analyse
+        # 3. Délai avant analyse
+        print("  Pause 30s avant analyse...")
+        time.sleep(30)
+
+        # 4. Analyse
         print("  Analyse Claude...")
         text     = call_simple(client, build_analysis_prompt(data, mois))
         analysis = extract_json(text)
@@ -394,9 +378,9 @@ def _fallback_analysis(data: dict) -> dict:
         "allocation_recommandee": {k:"N/D" for k in
             ["actions","obligations","matieres_premieres","immobilier",
              "cash_monetaire","private_equity","scpi"]},
-        "synthese_immobilier":  "Analyse indisponible.",
-        "synthese_pe":          "Analyse indisponible.",
-        "synthese_scpi":        "Analyse indisponible.",
-        "analyse_courbe_taux":  "Analyse indisponible.",
-        "analyse_credit":       "Analyse indisponible.",
+        "synthese_immobilier": "Analyse indisponible.",
+        "synthese_pe":         "Analyse indisponible.",
+        "synthese_scpi":       "Analyse indisponible.",
+        "analyse_courbe_taux": "Analyse indisponible.",
+        "analyse_credit":      "Analyse indisponible.",
     }
