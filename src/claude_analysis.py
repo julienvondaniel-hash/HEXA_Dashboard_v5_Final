@@ -1,7 +1,5 @@
 """
-Appel API Claude avec web_search pour collecter toutes les données dynamiques
-et produire l'analyse mensuelle complète.
-Divisé en 2 passes avec délais pour éviter les rate limits.
+Appel API Claude avec web_search — 3 passes courtes pour éviter les rate limits.
 """
 import os
 import json
@@ -27,7 +25,7 @@ def extract_json(text: str) -> dict:
     return json.loads(text)
 
 
-def call_with_search(client, prompt: str, max_tokens: int = 3000) -> str:
+def call_with_search(client, prompt: str, max_tokens: int = 2000) -> str:
     tools    = [{"type": "web_search_20250305", "name": "web_search"}]
     messages = [{"role": "user", "content": prompt}]
     for _ in range(20):
@@ -63,135 +61,56 @@ def call_simple(client, prompt: str) -> str:
 
 
 def fetch_all_dynamic_data(client, mois: str, annee: int) -> dict:
-    """Recherche web en 2 passes avec délai pour éviter les rate limits."""
+    """Recherche web en 3 passes courtes pour éviter les rate limits."""
     result = {}
 
-    # ── Passe 1 : Macro ───────────────────────────────────────────────────────
-    prompt1 = f"""Recherche ces données économiques pour {mois} {annee}.
-Utilise web_search. Réponds UNIQUEMENT avec ce JSON :
-{{
-  "pmi": {{
-    "france": {{"val":"","period":"","prev":"","source":""}},
-    "usa":    {{"val":"","period":"","prev":"","source":""}},
-    "ez":     {{"val":"","period":"","prev":"","source":""}},
-    "chine":  {{"val":"","period":"","prev":"","source":""}}
-  }},
-  "chine": {{
-    "pib_val":"","pib_period":"","pib_prev":"","pib_prev_period":"",
-    "cpi_val":"","cpi_period":"","cpi_prev":"","cpi_prev_period":"",
-    "pboc_val":"","pboc_prev":"","pboc_detail":""
-  }},
-  "cpi_flash": {{
-    "france_val":"","france_period":"","france_prev":"","france_source":"",
-    "ez_val":"","ez_period":"","ez_prev":"","ez_source":""
-  }},
-  "spread_oat_bund": {{"oat":"","bund":"","spread":"","spread_prev":"","source":""}},
-  "spread_us_curve": {{"us_2y":"","us_10y":"","spread":"","spread_prev":"","signal":"","source":""}},
-  "credit_spreads": {{
-    "ig_spread":"","ig_spread_prev":"","ig_spread_n1":"",
-    "hy_spread":"","hy_spread_prev":"","hy_spread_n1":"","source":""
-  }}
-}}
-
-Recherche :
-1. PMI composites S&P Global/HCOB/Caixin dernier mois {annee}
-2. PIB et CPI Chine {annee} (Reuters, Les Echos)
-3. CPI flash France et Zone Euro {mois} {annee}
-4. Spread OAT/Bund 10 ans aujourd'hui
-5. Spread courbe US 2ans/10ans aujourd'hui
-6. Spreads credit IG et HY"""
+    # ── Passe 1 : PMI + Chine + CPI flash ────────────────────────────────────
+    prompt1 = f"""Recherche pour {mois} {annee}. Reponds UNIQUEMENT avec ce JSON :
+{{"pmi":{{"france":{{"val":"","period":"","prev":"","source":""}},"usa":{{"val":"","period":"","prev":"","source":""}},"ez":{{"val":"","period":"","prev":"","source":""}},"chine":{{"val":"","period":"","prev":"","source":""}}}},"chine":{{"pib_val":"","pib_period":"","pib_prev":"","pib_prev_period":"","cpi_val":"","cpi_period":"","cpi_prev":"","cpi_prev_period":"","pboc_val":"","pboc_prev":"","pboc_detail":""}},"cpi_flash":{{"france_val":"","france_period":"","france_prev":"","france_source":"","ez_val":"","ez_period":"","ez_prev":"","ez_source":""}}}}
+Recherche : 1) PMI S&P Global/HCOB/Caixin {mois} {annee} 2) PIB CPI Chine {annee} 3) CPI flash France Zone Euro {mois} {annee}"""
 
     try:
-        print("  Passe 1 (macro)...")
-        text1 = call_with_search(client, prompt1, max_tokens=3000)
+        print("  Passe 1 (PMI/Chine/CPI)...")
+        text1 = call_with_search(client, prompt1, max_tokens=2000)
         if text1:
-            r1 = extract_json(text1)
-            result.update(r1)
+            result.update(extract_json(text1))
             print("  Passe 1 OK")
     except Exception as e:
         print(f"  Passe 1 echouee: {e}")
 
-    # Délai entre les passes
-    print("  Pause 60s (rate limit)...")
-    time.sleep(90)
+    print("  Pause 60s...")
+    time.sleep(60)
 
-    # ── Passe 2 : Immobilier, PE, SCPI ───────────────────────────────────────
-    prompt2 = f"""Recherche ces données pour {mois} {annee}.
-Utilise web_search. Réponds UNIQUEMENT avec ce JSON :
-{{
-  "immo_taux": {{
-    "taux_20ans":"","taux_20ans_prev":"","taux_20ans_n1":"",
-    "taux_20ans_commentaire":"",
-    "bureaux_val":"","bureaux_prev":"","bureaux_n1":"","bureaux_commentaire":"",
-    "commerces_val":"","commerces_prev":"","commerces_n1":"","commerces_commentaire":""
-  }},
-  "immo_prix": {{
-    "Paris":                 {{"val":0,"var_1an":0.0,"var_5ans":0.0,"periode":"","source":""}},
-    "Lyon":                  {{"val":0,"var_1an":0.0,"var_5ans":0.0,"periode":"","source":""}},
-    "Tassin-la-Demi-Lune":   {{"val":0,"var_1an":0.0,"var_5ans":0.0,"periode":"","source":""}},
-    "Saint-Foy-les-Lyon":    {{"val":0,"var_1an":0.0,"var_5ans":0.0,"periode":"","source":""}},
-    "Maisons-Laffitte":      {{"val":0,"var_1an":0.0,"var_5ans":0.0,"periode":"","source":""}},
-    "Le Vesinet":            {{"val":0,"var_1an":0.0,"var_5ans":0.0,"periode":"","source":""}},
-    "Chatou":                {{"val":0,"var_1an":0.0,"var_5ans":0.0,"periode":"","source":""}},
-    "Saint-Germain-en-Laye": {{"val":0,"var_1an":0.0,"var_5ans":0.0,"periode":"","source":""}}
-  }},
-  "argos": {{"val":"","prev":"","prev_period":"","n1":"","n1_period":"","source":""}},
-  "france_invest": {{
-    "levees":   {{"val":"","var":"","periode":""}},
-    "invest":   {{"val":"","var":"","periode":""}},
-    "cessions": {{"val":"","var":"","periode":""}},
-    "nb_ent":   {{"val":"","var":"","periode":""}},
-    "rdt":      {{"val":"","var":"","periode":""}}
-  }},
-  "dry_powder": {{"val":"","var":"","periode":"","source":""}},
-  "scpi": {{
-    "marche": {{
-      "td_moyen":"","td_moyen_prev":"","td_moyen_n1":"",
-      "collecte_nette":"","collecte_prev":"","collecte_periode":"",
-      "decote_secondaire":"","decote_prev":"","tof_moyen":"","source":""
-    }},
-    "par_secteur": [
-      {{"secteur":"Bureaux","poids":"","td":"","tendance":"▼","commentaire":""}},
-      {{"secteur":"Commerce","poids":"","td":"","tendance":"▶","commentaire":""}},
-      {{"secteur":"Sante","poids":"","td":"","tendance":"▲","commentaire":""}},
-      {{"secteur":"Logistique","poids":"","td":"","tendance":"▲","commentaire":""}},
-      {{"secteur":"Diversifie","poids":"","td":"","tendance":"▶","commentaire":""}},
-      {{"secteur":"Residentiel","poids":"","td":"","tendance":"▼","commentaire":""}},
-      {{"secteur":"Hotellerie","poids":"","td":"","tendance":"▲","commentaire":""}}
-    ],
-    "scpi_phares": [
-      {{"nom":"","gestionnaire":"","secteur":"","td":"","tof":"","prix_part":"","var_prix":"","note":""}},
-      {{"nom":"","gestionnaire":"","secteur":"","td":"","tof":"","prix_part":"","var_prix":"","note":""}},
-      {{"nom":"","gestionnaire":"","secteur":"","td":"","tof":"","prix_part":"","var_prix":"","note":""}},
-      {{"nom":"","gestionnaire":"","secteur":"","td":"","tof":"","prix_part":"","var_prix":"","note":""}},
-      {{"nom":"","gestionnaire":"","secteur":"","td":"","tof":"","prix_part":"","var_prix":"","note":""}}
-    ],
-    "analyse":"",
-    "points_vigilance":["","",""],
-    "opportunites":["","",""]
-  }}
-}}
-
-Recherche :
-1. Taux credit immobilier 20 ans France {mois} {annee} (CAFPI, Meilleurtaux)
-2. Bureaux vacants IDF et commerces France (CBRE, JLL)
-3. Prix m2 : Paris, Lyon, Tassin-la-Demi-Lune, Saint-Foy-les-Lyon,
-   Maisons-Laffitte, Le Vesinet, Chatou, Saint-Germain-en-Laye
-4. Indice Argos Mid-Market {annee} (argos-wityu.com)
-5. France Invest {annee} (france-invest.fr)
-6. Dry Powder PE mondial {annee}
-7. SCPI marche France {annee} : TD moyen, collecte, decote, TOF,
-   secteurs, 5 SCPI phares (ASPIM, MeilleuresSCPI.com)"""
+    # ── Passe 2 : Spreads + PE ────────────────────────────────────────────────
+    prompt2 = f"""Recherche pour {mois} {annee}. Reponds UNIQUEMENT avec ce JSON :
+{{"spread_oat_bund":{{"oat":"","bund":"","spread":"","spread_prev":"","source":""}},"spread_us_curve":{{"us_2y":"","us_10y":"","spread":"","spread_prev":"","signal":"","source":""}},"credit_spreads":{{"ig_spread":"","ig_spread_prev":"","ig_spread_n1":"","hy_spread":"","hy_spread_prev":"","hy_spread_n1":"","source":""}},"argos":{{"val":"","prev":"","prev_period":"","n1":"","n1_period":"","source":""}},"dry_powder":{{"val":"","var":"","periode":"","source":""}},"france_invest":{{"levees":{{"val":"","var":"","periode":""}},"invest":{{"val":"","var":"","periode":""}},"cessions":{{"val":"","var":"","periode":""}},"nb_ent":{{"val":"","var":"","periode":""}},"rdt":{{"val":"","var":"","periode":""}}}}}}
+Recherche : 1) Spread OAT/Bund aujourd'hui 2) Courbe US 2ans/10ans 3) Spreads IG HY 4) Argos Mid-Market {annee} 5) France Invest {annee} 6) Dry Powder PE {annee}"""
 
     try:
-        print("  Passe 2 (immo/PE/SCPI)...")
-        text2 = call_with_search(client, prompt2, max_tokens=3000)
+        print("  Passe 2 (spreads/PE)...")
+        text2 = call_with_search(client, prompt2, max_tokens=2000)
         if text2:
-            r2 = extract_json(text2)
-            result.update(r2)
+            result.update(extract_json(text2))
             print("  Passe 2 OK")
     except Exception as e:
         print(f"  Passe 2 echouee: {e}")
+
+    print("  Pause 60s...")
+    time.sleep(60)
+
+    # ── Passe 3 : Immo + SCPI ─────────────────────────────────────────────────
+    prompt3 = f"""Recherche pour {mois} {annee}. Reponds UNIQUEMENT avec ce JSON :
+{{"immo_taux":{{"taux_20ans":"","taux_20ans_prev":"","taux_20ans_n1":"","taux_20ans_commentaire":"","bureaux_val":"","bureaux_prev":"","bureaux_n1":"","bureaux_commentaire":"","commerces_val":"","commerces_prev":"","commerces_n1":"","commerces_commentaire":""}},"immo_prix":{{"Paris":{{"val":0,"var_1an":0.0,"var_5ans":0.0,"periode":"","source":""}},"Lyon":{{"val":0,"var_1an":0.0,"var_5ans":0.0,"periode":"","source":""}},"Tassin-la-Demi-Lune":{{"val":0,"var_1an":0.0,"var_5ans":0.0,"periode":"","source":""}},"Saint-Foy-les-Lyon":{{"val":0,"var_1an":0.0,"var_5ans":0.0,"periode":"","source":""}},"Maisons-Laffitte":{{"val":0,"var_1an":0.0,"var_5ans":0.0,"periode":"","source":""}},"Le Vesinet":{{"val":0,"var_1an":0.0,"var_5ans":0.0,"periode":"","source":""}},"Chatou":{{"val":0,"var_1an":0.0,"var_5ans":0.0,"periode":"","source":""}},"Saint-Germain-en-Laye":{{"val":0,"var_1an":0.0,"var_5ans":0.0,"periode":"","source":""}}}},"scpi":{{"marche":{{"td_moyen":"","td_moyen_prev":"","td_moyen_n1":"","collecte_nette":"","collecte_prev":"","collecte_periode":"","decote_secondaire":"","decote_prev":"","tof_moyen":"","source":""}},"par_secteur":[{{"secteur":"Bureaux","poids":"","td":"","tendance":"▼","commentaire":""}},{{"secteur":"Commerce","poids":"","td":"","tendance":"▶","commentaire":""}},{{"secteur":"Sante","poids":"","td":"","tendance":"▲","commentaire":""}},{{"secteur":"Logistique","poids":"","td":"","tendance":"▲","commentaire":""}},{{"secteur":"Diversifie","poids":"","td":"","tendance":"▶","commentaire":""}}],"scpi_phares":[{{"nom":"","gestionnaire":"","secteur":"","td":"","tof":"","prix_part":"","var_prix":"","note":""}},{{"nom":"","gestionnaire":"","secteur":"","td":"","tof":"","prix_part":"","var_prix":"","note":""}},{{"nom":"","gestionnaire":"","secteur":"","td":"","tof":"","prix_part":"","var_prix":"","note":""}}],"analyse":"","points_vigilance":["","",""],"opportunites":["","",""]}}}}
+Recherche : 1) Taux credit immo 20 ans France {mois} {annee} CAFPI 2) Bureaux vacants IDF CBRE JLL 3) Prix m2 Paris Lyon Tassin Saint-Foy Maisons-Laffitte Le Vesinet Chatou Saint-Germain 4) SCPI marche France {annee} TD collecte decote TOF secteurs 5 SCPI phares ASPIM MeilleuresSCPI"""
+
+    try:
+        print("  Passe 3 (immo/SCPI)...")
+        text3 = call_with_search(client, prompt3, max_tokens=3000)
+        if text3:
+            result.update(extract_json(text3))
+            print("  Passe 3 OK")
+    except Exception as e:
+        print(f"  Passe 3 echouee: {e}")
 
     return result
 
@@ -339,23 +258,20 @@ def get_claude_analysis(data: dict) -> tuple:
     annee   = today.year
 
     if not api_key:
-        print("  ANTHROPIC_API_KEY non definie — fallbacks N/D")
+        print("  ANTHROPIC_API_KEY non definie")
         return _fallback_analysis(data), {}
 
     try:
         client = anthropic.Anthropic(api_key=api_key)
 
-        # 1. Recherche web (2 passes avec délai)
+        # 3 passes avec délais
         dynamic = fetch_all_dynamic_data(client, mois, annee)
-
-        # 2. Injecter dans data
         _inject_dynamic(data, dynamic)
 
-        # 3. Délai avant analyse
+        # Pause avant analyse
         print("  Pause 60s avant analyse...")
-        time.sleep(90)
+        time.sleep(60)
 
-        # 4. Analyse
         print("  Analyse Claude...")
         text     = call_simple(client, build_analysis_prompt(data, mois))
         analysis = extract_json(text)
@@ -363,7 +279,7 @@ def get_claude_analysis(data: dict) -> tuple:
         return analysis, dynamic
 
     except Exception as e:
-        print(f"  Erreur Claude: {e} — fallbacks N/D")
+        print(f"  Erreur Claude: {e}")
         return _fallback_analysis(data), {}
 
 
