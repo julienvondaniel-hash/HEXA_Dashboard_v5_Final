@@ -78,8 +78,8 @@ Recherche : 1) PMI S&P Global/HCOB/Caixin {mois} {annee} 2) PIB CPI Chine {annee
     except Exception as e:
         print(f"  Passe 1 echouee: {e}")
 
-    print("  Pause 120s...")
-    time.sleep(120)
+    print("  Pause 10s...")
+    time.sleep(10)
 
     # ── Passe 2 : Spreads + PE ────────────────────────────────────────────────
     prompt2 = f"""Recherche pour {mois} {annee}. Reponds UNIQUEMENT avec ce JSON :
@@ -95,8 +95,8 @@ Recherche : 1) Spread OAT/Bund aujourd'hui 2) Courbe US 2ans/10ans 3) Spreads IG
     except Exception as e:
         print(f"  Passe 2 echouee: {e}")
 
-    print("  Pause 60s...")
-    time.sleep(120)
+    print("  Pause 10s...")
+    time.sleep(10)
 
     # ── Passe 3 : Immo + SCPI ─────────────────────────────────────────────────
     prompt3 = f"""Recherche pour {mois} {annee}. Reponds UNIQUEMENT avec ce JSON :
@@ -269,8 +269,8 @@ def get_claude_analysis(data: dict) -> tuple:
         _inject_dynamic(data, dynamic)
 
         # Pause avant analyse
-        print("  Pause 120s avant analyse...")
-        time.sleep(120)
+        print("  Pause 10s avant analyse...")
+        time.sleep(10)
 
         print("  Analyse Claude...")
         text     = call_simple(client, build_analysis_prompt(data, mois))
