@@ -222,7 +222,7 @@ def call_with_search(client, prompt: str, max_tokens: int = 5000) -> str:
     messages = [{"role": "user", "content": prompt}]
     for _ in range(20):
         response = client.messages.create(
-            model="claude-sonnet-4-20250514", max_tokens=max_tokens,
+            model="claude-sonnet-4-5", max_tokens=max_tokens,
             tools=tools, messages=messages)
         if response.stop_reason == "end_turn":
             for block in response.content:
@@ -239,7 +239,7 @@ def call_with_search(client, prompt: str, max_tokens: int = 5000) -> str:
 
 def call_simple(client, prompt: str) -> str:
     response = client.messages.create(
-        model="claude-sonnet-4-20250514", max_tokens=2500,
+        model="claude-sonnet-4-5", max_tokens=2500,
         messages=[{"role":"user","content":prompt}])
     return response.content[0].text
 
