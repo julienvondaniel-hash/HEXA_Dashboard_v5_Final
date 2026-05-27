@@ -9,15 +9,19 @@ import json
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; HEXADashboard/1.0)"}
 
-def get(url, timeout=30):
-    for attempt in range(2):
+def get(url, timeout=45, retries=3):
+    """GET avec retry exponentiel et timeout genereux pour les APIs FRED/BEA souvent lentes."""
+    import time as _t
+    for attempt in range(retries):
         try:
             r = requests.get(url, headers=HEADERS, timeout=timeout)
             r.raise_for_status()
             return r
         except Exception as e:
-            print(f"  Tentative {attempt+1}/2 echouee: {e}")
-            if attempt == 1: return None
+            print(f"  Tentative {attempt+1}/{retries} echouee: {e}")
+            if attempt < retries - 1:
+                _t.sleep(2 ** attempt)  # 1s, 2s, 4s entre tentatives
+    return None
 
 def get_json(url, **kw):
     r = get(url, **kw)
@@ -25,25 +29,67 @@ def get_json(url, **kw):
     try: return r.json()
     except: return {}
 
+
+def fetch_fred_series(series_id, timeout=45):
+    """
+    Recupere une serie FRED via l'endpoint CSV stable.
+    Retourne une liste de tuples (date_str, valeur_float) triee chronologiquement,
+    ou liste vide en cas d'echec. Cette helper centralise tous les acces FRED.
+    """
+    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+    r = get(url, timeout=timeout)
+    if r is None:
+        return []
+    lines = [l for l in r.text.strip().split("\n") if l and not l.startswith("DATE")]
+    out = []
+    for line in lines:
+        cells = line.split(",")
+        if len(cells) < 2:
+            continue
+        d = cells[0].strip()
+        v = cells[1].strip()
+        if v in ("", "."):
+            continue
+        try:
+            out.append((d, float(v)))
+        except ValueError:
+            continue
+    out.sort(key=lambda x: x[0])
+    return out
+
 def fetch_gdp_usa():
     try:
         url = ("https://apps.bea.gov/api/data?UserID=GUEST"
                "&method=GetData&DataSetName=NIPA"
                "&TableName=T10101&Frequency=Q&Year=X&ResultFormat=JSON")
         data = get_json(url)
-        rows = [r for r in data["BEAAPI"]["Results"]["Data"] if r.get("SeriesCode")=="A191RL"]
-        if not rows: raise Exception("pas de donnees")
-        rows.sort(key=lambda x: x.get("TimePeriod",""))
+        # Structure attendue : BEAAPI.Results.Data (anciennement)
+        # ou BEAAPI.Results[0].Data (parfois liste). On gere les deux cas.
+        try:
+            results = data["BEAAPI"]["Results"]
+        except (KeyError, TypeError):
+            raise Exception("BEAAPI.Results manquant")
+        if isinstance(results, list) and results:
+            results = results[0]
+        rows_raw = results.get("Data", [])
+        if not rows_raw:
+            raise Exception("Data absent ou vide")
+        rows = [r for r in rows_raw if r.get("SeriesCode") == "A191RL"]
+        if not rows:
+            raise Exception("pas de serie A191RL")
+        rows.sort(key=lambda x: x.get("TimePeriod", ""))
         def fmt(r):
-            p=r["TimePeriod"]; y,q=p[:4],p[4:]
-            return f"T{q} {y} (ann.)", float(r["DataValue"].replace(",",""))
-        lp,lv=fmt(rows[-1]); pp,pv=fmt(rows[-2]); np_,nv=fmt(rows[-5] if len(rows)>=5 else rows[0])
-        return {"val":f"{lv:+.1f}%","period":lp,"prev":f"{pv:+.1f}%","prev_period":pp,
-                "n1":f"{nv:+.1f}%","n1_period":np_,"source":"BEA (apps.bea.gov)"}
+            p = r["TimePeriod"]; y, q = p[:4], p[4:]
+            return f"T{q} {y} (ann.)", float(r["DataValue"].replace(",", ""))
+        lp, lv = fmt(rows[-1])
+        pp, pv = fmt(rows[-2]) if len(rows) >= 2 else (lp, lv)
+        np_, nv = fmt(rows[-5]) if len(rows) >= 5 else fmt(rows[0])
+        return {"val": f"{lv:+.1f}%", "period": lp, "prev": f"{pv:+.1f}%", "prev_period": pp,
+                "n1": f"{nv:+.1f}%", "n1_period": np_, "source": "BEA (apps.bea.gov)"}
     except Exception as e:
         print(f"  BEA echoue: {e}")
-        return {"val":"N/D","period":"N/D","prev":"N/D","prev_period":"N/D",
-                "n1":"N/D","n1_period":"N/D","source":"BEA (indisponible)"}
+        return {"val": "N/D", "period": "N/D", "prev": "N/D", "prev_period": "N/D",
+                "n1": "N/D", "n1_period": "N/D", "source": "BEA (web_search en repli)"}
 
 def fetch_gdp_eurostat(geo="EA20"):
     try:
@@ -105,26 +151,42 @@ def fetch_cpi_eurostat(geo="EA"):
                 "n1":"N/D","n1_period":"N/D","source":"Eurostat (indisponible)"}
 
 def fetch_ecb_rate():
+    # Tentative 1 : FRED ECBDFR (Deposit Facility Rate, mis a jour quotidiennement)
     try:
-        url=("https://data-api.ecb.europa.eu/service/data/FM/B.U2.EUR.4F.KR.DFR.LEV"
-             "?format=csvdata&startPeriod=2024-01-01&detail=dataonly")
-        r=get(url)
+        rows = fetch_fred_series("ECBDFR")
+        if not rows:
+            raise Exception("FRED ECBDFR vide")
+        last_d, last_v = rows[-1]
+        prev_d, prev_v = rows[-2] if len(rows) >= 2 else rows[-1]
+        # Pour la "precedente DIFFERENTE", on cherche le dernier changement
+        prev_change_d, prev_change_v = last_d, last_v
+        for d, v in reversed(rows[:-1]):
+            if v != last_v:
+                prev_change_d, prev_change_v = d, v
+                break
+        return {"val": f"{last_v:.2f}%", "detail": "Taux de depot BCE (DFR)",
+                "prev": f"{prev_change_v:.2f}%", "prev_period": prev_change_d[:7],
+                "source": "FRED (ECBDFR)"}
+    except Exception as e1:
+        print(f"  FRED ECBDFR echoue: {e1}")
+    # Tentative 2 : ECB SDW (CSV avec header)
+    try:
+        url = ("https://data-api.ecb.europa.eu/service/data/FM/B.U2.EUR.4F.KR.DFR.LEV"
+               "?format=csvdata&startPeriod=2024-01-01&detail=dataonly")
+        r = get(url)
         if r is None: raise Exception("timeout")
-        # Le CSV ECB SDW commence par un header. La colonne TIME_PERIOD contient la date,
-        # OBS_VALUE la valeur. On les retrouve par leur nom plutot que par position.
         raw_lines = [l for l in r.text.strip().split("\n") if l.strip()]
         if not raw_lines: raise Exception("CSV vide")
         header = [h.strip() for h in raw_lines[0].split(",")]
         try:
             date_idx = header.index("TIME_PERIOD")
-            val_idx  = header.index("OBS_VALUE")
+            val_idx = header.index("OBS_VALUE")
         except ValueError:
-            # Fallback : ancien format (date en pos 0, valeur en derniere colonne)
             date_idx, val_idx = 0, -1
         rows = []
         for line in raw_lines[1:]:
             cells = line.split(",")
-            if len(cells) <= max(date_idx, val_idx if val_idx>=0 else 0):
+            if len(cells) <= max(date_idx, val_idx if val_idx >= 0 else 0):
                 continue
             d = cells[date_idx].strip()
             v = cells[val_idx].strip()
@@ -137,79 +199,64 @@ def fetch_ecb_rate():
         rows.sort(key=lambda x: x[0])
         last_d, last_v = rows[-1]
         prev_d, prev_v = rows[-2] if len(rows) >= 2 else rows[-1]
-        return {"val":f"{last_v:.2f}%","detail":"Taux de depot BCE",
-                "prev":f"{prev_v:.2f}%","prev_period":prev_d[:7],"source":"ECB SDW"}
-    except Exception as e:
-        print(f"  ECB SDW echoue: {e}")
-        return {"val":"N/D","detail":"Taux de depot BCE","prev":"N/D","prev_period":"N/D","source":"ECB SDW (indisponible)"}
+        return {"val": f"{last_v:.2f}%", "detail": "Taux de depot BCE",
+                "prev": f"{prev_v:.2f}%", "prev_period": prev_d[:7], "source": "ECB SDW"}
+    except Exception as e2:
+        print(f"  ECB SDW echoue: {e2}")
+    return {"val": "N/D", "detail": "Taux de depot BCE", "prev": "N/D",
+            "prev_period": "N/D", "source": "BCE (web_search en repli)"}
 
 def fetch_fed_rate():
-    # Tentative 1 : FRED DFEDTARU (Upper Target Rate, plus stable que H.15 XML)
+    # Tentative 1 : FRED DFEDTARU (Upper Target Rate, le plus stable)
     try:
-        url="https://fred.stlouisfed.org/graph/fredgraph.csv?id=DFEDTARU"
-        r=get(url)
-        if r is None: raise Exception("FRED timeout")
-        lines=[l for l in r.text.strip().split("\n") if l and not l.startswith("DATE")]
-        valid=[l for l in lines if len(l.split(",")) >= 2 and l.split(",")[1].strip() not in ("",".",)]
-        if not valid: raise Exception("FRED pas de donnees")
-        # Une ligne par jour ouvre ; on echantillonne sur le dernier point, M-1 (~22 jours), A-1 (~252 jours)
-        def parse(line):
-            d,v = line.split(",")
-            return d.strip(), float(v.strip())
-        last_d, last_v = parse(valid[-1])
-        prev_d, prev_v = parse(valid[-22]) if len(valid)>=22 else parse(valid[-2])
-        n1_d,   n1_v   = parse(valid[-252]) if len(valid)>=252 else parse(valid[0])
-        return {"val":f"{last_v:.2f}%","period":last_d[:7],
-                "prev":f"{prev_v:.2f}%","prev_period":prev_d[:7],
-                "n1":f"{n1_v:.2f}%","n1_period":n1_d[:7],
-                "source":"FRED (DFEDTARU - Upper Target Rate)"}
+        rows = fetch_fred_series("DFEDTARU")
+        if not rows:
+            raise Exception("FRED DFEDTARU vide")
+        last_d, last_v = rows[-1]
+        prev_d, prev_v = rows[-22] if len(rows) >= 22 else (rows[-2] if len(rows) >= 2 else rows[-1])
+        n1_d, n1_v = rows[-252] if len(rows) >= 252 else rows[0]
+        return {"val": f"{last_v:.2f}%", "period": last_d[:7],
+                "prev": f"{prev_v:.2f}%", "prev_period": prev_d[:7],
+                "n1": f"{n1_v:.2f}%", "n1_period": n1_d[:7],
+                "source": "FRED (DFEDTARU - Upper Target Rate)"}
     except Exception as e1:
         print(f"  FRED DFEDTARU echoue: {e1}")
-    # Tentative 2 : H.15 XML (ancien comportement)
+    # Tentative 2 : FRED DFF (Effective Federal Funds Rate, autre serie fiable)
     try:
-        url="https://www.federalreserve.gov/releases/h15/current/h15.xml"
-        r=get(url)
-        if r is None: raise Exception("H.15 timeout")
-        import xml.etree.ElementTree as ET
-        root=ET.fromstring(r.text)
-        obs=[]
-        for s in root.iter():
-            if "Obs" in s.tag:
-                d=s.get("TIME_PERIOD",""); v=s.get("OBS_VALUE","")
-                if d and v and v!="ND":
-                    try: obs.append((d,float(v)))
-                    except: pass
-        if len(obs)<2: raise Exception("H.15 pas de donnees")
-        obs.sort(key=lambda x: x[0])
-        return {"val":f"{obs[-1][1]:.2f}%","period":obs[-1][0][:7],
-                "prev":f"{obs[-2][1]:.2f}%","prev_period":obs[-2][0][:7],
-                "n1":f"{obs[-13][1]:.2f}%" if len(obs)>=13 else "N/D",
-                "n1_period":obs[-13][0][:7] if len(obs)>=13 else "N/D",
-                "source":"Fed H.15 (federalreserve.gov)"}
+        rows = fetch_fred_series("DFF")
+        if not rows:
+            raise Exception("FRED DFF vide")
+        last_d, last_v = rows[-1]
+        prev_d, prev_v = rows[-22] if len(rows) >= 22 else (rows[-2] if len(rows) >= 2 else rows[-1])
+        n1_d, n1_v = rows[-252] if len(rows) >= 252 else rows[0]
+        return {"val": f"{last_v:.2f}%", "period": last_d[:7],
+                "prev": f"{prev_v:.2f}%", "prev_period": prev_d[:7],
+                "n1": f"{n1_v:.2f}%", "n1_period": n1_d[:7],
+                "source": "FRED (DFF - Effective Federal Funds Rate)"}
     except Exception as e2:
-        print(f"  Fed H.15 echoue: {e2}")
-    # Fallback : N/D, sera complete par Claude web_search
-    return {"val":"N/D","period":"N/D","prev":"N/D","prev_period":"N/D",
-            "n1":"N/D","n1_period":"N/D","source":"Fed (web_search)"}
+        print(f"  FRED DFF echoue: {e2}")
+    return {"val": "N/D", "period": "N/D", "prev": "N/D", "prev_period": "N/D",
+            "n1": "N/D", "n1_period": "N/D", "source": "Fed (web_search en repli)"}
 
 def fetch_euribor():
+    # Tentative 1 : ECB SDW (mensuel, format CSV)
     try:
-        url=("https://data-api.ecb.europa.eu/service/data/FM/B.U2.EUR.RT0.MM.EURIBOR3MD_.HSTA"
-             "?format=csvdata&startPeriod=2024-01-01&detail=dataonly")
-        r=get(url)
+        url = ("https://data-api.ecb.europa.eu/service/data/FM/B.U2.EUR.RT0.MM.EURIBOR3MD_.HSTA"
+               "?format=csvdata&startPeriod=2024-01-01&detail=dataonly")
+        r = get(url)
         if r is None: raise Exception("timeout")
         raw_lines = [l for l in r.text.strip().split("\n") if l.strip()]
         if not raw_lines: raise Exception("CSV vide")
         header = [h.strip() for h in raw_lines[0].split(",")]
         try:
             date_idx = header.index("TIME_PERIOD")
-            val_idx  = header.index("OBS_VALUE")
+            val_idx = header.index("OBS_VALUE")
         except ValueError:
             date_idx, val_idx = 0, -1
         rows = []
         for line in raw_lines[1:]:
             cells = line.split(",")
-            if len(cells) <= max(date_idx, val_idx if val_idx>=0 else 0):
+            if len(cells) <= max(date_idx, val_idx if val_idx >= 0 else 0):
                 continue
             d = cells[date_idx].strip()
             v = cells[val_idx].strip()
@@ -222,14 +269,28 @@ def fetch_euribor():
         rows.sort(key=lambda x: x[0])
         last_d, last_v = rows[-1]
         prev_d, prev_v = rows[-2] if len(rows) >= 2 else rows[-1]
-        n1_d,   n1_v   = rows[-252] if len(rows) >= 252 else rows[0]
-        return {"val":f"{last_v:.3f}%","date":last_d,
-                "prev":f"{prev_v:.3f}%","prev_date":prev_d,
-                "n1":f"{n1_v:.3f}%","n1_date":n1_d,"source":"ECB SDW (Euribor 3M)"}
-    except Exception as e:
-        print(f"  Euribor echoue: {e}")
-        return {"val":"N/D","date":"N/D","prev":"N/D","prev_date":"N/D",
-                "n1":"N/D","n1_date":"N/D","source":"ECB SDW (web_search en repli)"}
+        n1_d, n1_v = rows[-12] if len(rows) >= 12 else rows[0]
+        return {"val": f"{last_v:.3f}%", "date": last_d,
+                "prev": f"{prev_v:.3f}%", "prev_date": prev_d,
+                "n1": f"{n1_v:.3f}%", "n1_date": n1_d, "source": "ECB SDW (Euribor 3M)"}
+    except Exception as e1:
+        print(f"  ECB SDW Euribor echoue: {e1}")
+    # Tentative 2 : FRED IR3TIB01EZM156N (interbancaire 3 mois zone euro, proxy Euribor)
+    try:
+        rows = fetch_fred_series("IR3TIB01EZM156N")
+        if not rows:
+            raise Exception("FRED IR3TIB01EZM156N vide")
+        last_d, last_v = rows[-1]
+        prev_d, prev_v = rows[-2] if len(rows) >= 2 else rows[-1]
+        n1_d, n1_v = rows[-13] if len(rows) >= 13 else rows[0]
+        return {"val": f"{last_v:.3f}%", "date": last_d,
+                "prev": f"{prev_v:.3f}%", "prev_date": prev_d,
+                "n1": f"{n1_v:.3f}%", "n1_date": n1_d,
+                "source": "FRED (IR3TIB01EZM156N - proxy OECD)"}
+    except Exception as e2:
+        print(f"  FRED Euribor proxy echoue: {e2}")
+    return {"val": "N/D", "date": "N/D", "prev": "N/D", "prev_date": "N/D",
+            "n1": "N/D", "n1_date": "N/D", "source": "Euribor (web_search en repli)"}
 
 def fetch_vix():
     try:
@@ -292,41 +353,45 @@ def fetch_fear_greed():
         return {"val":"N/D","label":"N/D","prev":"N/D","n1":"N/D","source":f"CNN (erreur: {e})"}
 
 def fetch_oat_bund_spread():
-    # Tentative 1 : Yahoo Finance
+    # Tentative 1 : FRED OECD series (mensuel, fiable)
+    try:
+        fr_rows = fetch_fred_series("IRLTLT01FRM156N")  # France 10 ans
+        de_rows = fetch_fred_series("IRLTLT01DEM156N")  # Germany 10 ans
+        if not fr_rows or not de_rows:
+            raise Exception("FRED OECD vide")
+        fr_last_d, fr = fr_rows[-1]
+        de_last_d, de = de_rows[-1]
+        fr_prev = fr_rows[-2][1] if len(fr_rows) >= 2 else fr
+        de_prev = de_rows[-2][1] if len(de_rows) >= 2 else de
+        return {"spread": f"{(fr - de) * 100:.0f}",
+                "spread_prev": f"{(fr_prev - de_prev) * 100:.0f}",
+                "oat": f"{fr:.2f}%", "bund": f"{de:.2f}%",
+                "source": f"FRED OECD (mensuel, {fr_last_d[:7]})"}
+    except Exception as e1:
+        print(f"  FRED OECD spread echoue: {e1}")
+    # Tentative 2 : Yahoo Finance (tickers volatiles, peuvent disparaitre)
     try:
         def get_yield(ticker):
-            data=get_json(f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=2mo")
-            if not data: return None,None
-            closes=data["chart"]["result"][0]["indicators"]["quote"][0]["close"]
-            valid=[c for c in closes if c is not None]
-            return (valid[-1],valid[-2]) if len(valid)>=2 else (None,None)
-        fr,fr_p=get_yield("FR10YT=RR"); de,de_p=get_yield("DE10YT=RR")
+            data = get_json(f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=2mo")
+            if not data: return None, None
+            try:
+                closes = data["chart"]["result"][0]["indicators"]["quote"][0]["close"]
+            except (KeyError, IndexError, TypeError):
+                return None, None
+            valid = [c for c in closes if c is not None]
+            return (valid[-1], valid[-2]) if len(valid) >= 2 else (None, None)
+        fr, fr_p = get_yield("FR10YT=RR")
+        de, de_p = get_yield("DE10YT=RR")
         if fr and de:
-            return {"spread":f"{(fr-de)*100:.0f}","spread_prev":f"{(fr_p-de_p)*100:.0f}" if fr_p and de_p else "N/D",
-                    "oat":f"{fr:.2f}%","bund":f"{de:.2f}%","source":"Yahoo Finance (taux 10 ans)"}
-        raise Exception("tickers non disponibles")
-    except Exception as e1:
-        print(f"  Yahoo spread echoue: {e1}")
-    # Tentative 2 : ECB SDW
-    try:
-        def get_ecb(country):
-            url=(f"https://data-api.ecb.europa.eu/service/data/"
-                 f"IRS/M.{country}.L.L40.CI.0.EUR.N.Z?format=csvdata&startPeriod=2024-01-01&detail=dataonly")
-            r=get(url)
-            if r is None: return None,None
-            lines=[l for l in r.text.strip().split("\n") if l and not l.startswith("KEY") and not l.startswith("DATAFLOW")]
-            valid=[l for l in lines if l.split(",")[-1].strip() not in ("",".",)]
-            if not valid: return None,None
-            return float(valid[-1].split(",")[-1]),float(valid[-2].split(",")[-1]) if len(valid)>=2 else None
-        fr,fr_p=get_ecb("FR"); de,de_p=get_ecb("DE")
-        if fr and de:
-            return {"spread":f"{(fr-de)*100:.0f}","spread_prev":f"{(fr_p-de_p)*100:.0f}" if fr_p and de_p else "N/D",
-                    "oat":f"{fr:.2f}%","bund":f"{de:.2f}%","source":"ECB SDW (taux mensuels)"}
-        raise Exception("ECB SDW indisponible")
+            return {"spread": f"{(fr - de) * 100:.0f}",
+                    "spread_prev": f"{(fr_p - de_p) * 100:.0f}" if fr_p and de_p else "N/D",
+                    "oat": f"{fr:.2f}%", "bund": f"{de:.2f}%",
+                    "source": "Yahoo Finance (taux 10 ans)"}
+        raise Exception("tickers Yahoo non disponibles")
     except Exception as e2:
-        print(f"  ECB SDW spread echoue: {e2}")
-    # Fallback : N/D, sera complété par Claude web_search
-    return {"spread":"N/D","spread_prev":"N/D","oat":"N/D","bund":"N/D","source":"web_search"}
+        print(f"  Yahoo spread echoue: {e2}")
+    return {"spread": "N/D", "spread_prev": "N/D", "oat": "N/D", "bund": "N/D",
+            "source": "OAT/Bund (web_search en repli)"}
 
 def fetch_us_yield_curve():
     """Spread 2ans/10ans US — signal inversion courbe"""
@@ -356,30 +421,30 @@ def fetch_us_yield_curve():
                 "signal":"N/D","source":"Yahoo Finance (indisponible)"}
 
 def fetch_credit_spreads():
-    """Spreads IG/HY via FRED"""
+    """Spreads IG/HY via FRED. Les spreads sont en % chez FRED (OAS), on garde tel quel."""
     try:
-        def get_fred(series_id):
-            url=f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
-            r=get(url)
-            if r is None: return None,None,None
-            lines=[l for l in r.text.strip().split("\n") if l and not l.startswith("DATE")]
-            valid=[l for l in lines if l.split(",")[1].strip() not in ("",".",)]
-            if not valid: return None,None,None
-            last=valid[-1].split(","); prev=valid[-2].split(",")
-            n1=valid[-22].split(",") if len(valid)>=22 else valid[0].split(",")
-            return float(last[1]),float(prev[1]),float(n1[1])
-        ig_v,ig_p,ig_n = get_fred("BAMLC0A0CM")    # IG OAS spread
-        hy_v,hy_p,hy_n = get_fred("BAMLH0A0HYM2")  # HY OAS spread
-        if ig_v and hy_v:
-            return {"ig_spread":f"{ig_v:.2f}%","ig_spread_prev":f"{ig_p:.2f}%" if ig_p else "N/D","ig_spread_n1":f"{ig_n:.2f}%" if ig_n else "N/D",
-                    "hy_spread":f"{hy_v:.2f}%","hy_spread_prev":f"{hy_p:.2f}%" if hy_p else "N/D","hy_spread_n1":f"{hy_n:.2f}%" if hy_n else "N/D",
-                    "source":"FRED (BAMLC0A0CM / BAMLH0A0HYM2)"}
-        raise Exception("FRED indisponible")
+        ig_rows = fetch_fred_series("BAMLC0A0CM")    # IG OAS spread
+        hy_rows = fetch_fred_series("BAMLH0A0HYM2")  # HY OAS spread
+        if not ig_rows or not hy_rows:
+            raise Exception("FRED IG/HY vide")
+        ig_v = ig_rows[-1][1]
+        ig_p = ig_rows[-2][1] if len(ig_rows) >= 2 else ig_v
+        ig_n = ig_rows[-22][1] if len(ig_rows) >= 22 else ig_rows[0][1]
+        hy_v = hy_rows[-1][1]
+        hy_p = hy_rows[-2][1] if len(hy_rows) >= 2 else hy_v
+        hy_n = hy_rows[-22][1] if len(hy_rows) >= 22 else hy_rows[0][1]
+        return {"ig_spread": f"{ig_v:.2f}%",
+                "ig_spread_prev": f"{ig_p:.2f}%",
+                "ig_spread_n1": f"{ig_n:.2f}%",
+                "hy_spread": f"{hy_v:.2f}%",
+                "hy_spread_prev": f"{hy_p:.2f}%",
+                "hy_spread_n1": f"{hy_n:.2f}%",
+                "source": "FRED (BAMLC0A0CM / BAMLH0A0HYM2)"}
     except Exception as e:
         print(f"  Credit spreads echoues: {e}")
-        return {"ig_spread":"N/D","ig_spread_prev":"N/D","ig_spread_n1":"N/D",
-                "hy_spread":"N/D","hy_spread_prev":"N/D","hy_spread_n1":"N/D",
-                "source":"FRED (indisponible — sera mis a jour par web_search)"}
+        return {"ig_spread": "N/D", "ig_spread_prev": "N/D", "ig_spread_n1": "N/D",
+                "hy_spread": "N/D", "hy_spread_prev": "N/D", "hy_spread_n1": "N/D",
+                "source": "FRED (web_search en repli)"}
 
 def fetch_commodity(ticker):
     try:
@@ -419,40 +484,51 @@ def fetch_eurusd():
 
 def fetch_worldbank(indicator, country_code):
     try:
-        url=(f"https://api.worldbank.org/v2/country/{country_code}/"
-             f"indicator/{indicator}?format=json&mrv=4&per_page=4")
-        data=get_json(url)
-        if not data or len(data)<2: raise Exception("pas de donnees")
-        entries=[(e["date"],e["value"]) for e in data[1] if e.get("value") is not None]
-        if len(entries)<2: raise Exception("pas assez")
-        entries.sort(key=lambda x: x[0],reverse=True)
-        return {"val":f"{entries[0][1]:+.1f}%","period":entries[0][0],
-                "prev":f"{entries[1][1]:+.1f}%","prev_period":entries[1][0],
-                "n1":f"{entries[2][1]:+.1f}%" if len(entries)>=3 else "N/D",
-                "n1_period":entries[2][0] if len(entries)>=3 else "N/D"}
+        url = (f"https://api.worldbank.org/v2/country/{country_code}/"
+               f"indicator/{indicator}?format=json&mrv=4&per_page=4")
+        data = get_json(url)
+        # data peut etre {} (echec), [{...meta}, None] (pas de donnees pour ce code),
+        # ou [{...meta}, [entrees]] (cas normal). On verifie tout.
+        if not data or not isinstance(data, list) or len(data) < 2:
+            raise Exception("pas de donnees")
+        entries_raw = data[1]
+        if not entries_raw or not isinstance(entries_raw, list):
+            raise Exception(f"liste vide pour {country_code}")
+        entries = [(e["date"], e["value"]) for e in entries_raw
+                   if isinstance(e, dict) and e.get("value") is not None]
+        if len(entries) < 2:
+            raise Exception("pas assez de points")
+        entries.sort(key=lambda x: x[0], reverse=True)
+        return {"val": f"{entries[0][1]:+.1f}%", "period": entries[0][0],
+                "prev": f"{entries[1][1]:+.1f}%", "prev_period": entries[1][0],
+                "n1": f"{entries[2][1]:+.1f}%" if len(entries) >= 3 else "N/D",
+                "n1_period": entries[2][0] if len(entries) >= 3 else "N/D"}
     except Exception as e:
         print(f"  Banque Mondiale {country_code} echoue: {e}")
         return None
 
 def fetch_emerging_zones():
-    zones={}
-    print("    Amerique latine...")
-    gdp_lac=fetch_worldbank("NY.GDP.MKTP.KD.ZG","4E")
-    cpi_lac=fetch_worldbank("FP.CPI.TOTL.ZG","4E")
-    zones["am_latine"]={
-        "gdp":{**(gdp_lac or {"val":"N/D","period":"N/D","prev":"N/D","prev_period":"N/D","n1":"N/D","n1_period":"N/D"}),
-               "source":"Banque Mondiale" if gdp_lac else "indisponible"},
-        "cpi":{**(cpi_lac or {"val":"N/D","period":"N/D","prev":"N/D","prev_period":"N/D","n1":"N/D","n1_period":"N/D"}),
-               "source":"Banque Mondiale" if cpi_lac else "indisponible"},
+    zones = {}
+    # CORRECTION : codes WB valides
+    # LCN = Latin America & Caribbean
+    # EAS = East Asia & Pacific (aggregate)
+    print("    Amerique latine (LCN)...")
+    gdp_lac = fetch_worldbank("NY.GDP.MKTP.KD.ZG", "LCN")
+    cpi_lac = fetch_worldbank("FP.CPI.TOTL.ZG", "LCN")
+    zones["am_latine"] = {
+        "gdp": {**(gdp_lac or {"val": "N/D", "period": "N/D", "prev": "N/D", "prev_period": "N/D", "n1": "N/D", "n1_period": "N/D"}),
+                "source": "Banque Mondiale (LCN)" if gdp_lac else "Banque Mondiale (web_search en repli)"},
+        "cpi": {**(cpi_lac or {"val": "N/D", "period": "N/D", "prev": "N/D", "prev_period": "N/D", "n1": "N/D", "n1_period": "N/D"}),
+                "source": "Banque Mondiale (LCN)" if cpi_lac else "Banque Mondiale (web_search en repli)"},
     }
-    print("    Asie ex-Chine...")
-    gdp_asie=fetch_worldbank("NY.GDP.MKTP.KD.ZG","Z4")
-    cpi_asie=fetch_worldbank("FP.CPI.TOTL.ZG","Z4")
-    zones["asie_ex_chine"]={
-        "gdp":{**(gdp_asie or {"val":"N/D","period":"N/D","prev":"N/D","prev_period":"N/D","n1":"N/D","n1_period":"N/D"}),
-               "source":"Banque Mondiale" if gdp_asie else "indisponible"},
-        "cpi":{**(cpi_asie or {"val":"N/D","period":"N/D","prev":"N/D","prev_period":"N/D","n1":"N/D","n1_period":"N/D"}),
-               "source":"Banque Mondiale" if cpi_asie else "indisponible"},
+    print("    Asie ex-Chine (EAS)...")
+    gdp_asie = fetch_worldbank("NY.GDP.MKTP.KD.ZG", "EAS")
+    cpi_asie = fetch_worldbank("FP.CPI.TOTL.ZG", "EAS")
+    zones["asie_ex_chine"] = {
+        "gdp": {**(gdp_asie or {"val": "N/D", "period": "N/D", "prev": "N/D", "prev_period": "N/D", "n1": "N/D", "n1_period": "N/D"}),
+                "source": "Banque Mondiale (EAS)" if gdp_asie else "Banque Mondiale (web_search en repli)"},
+        "cpi": {**(cpi_asie or {"val": "N/D", "period": "N/D", "prev": "N/D", "prev_period": "N/D", "n1": "N/D", "n1_period": "N/D"}),
+                "source": "Banque Mondiale (EAS)" if cpi_asie else "Banque Mondiale (web_search en repli)"},
     }
     return zones
 
