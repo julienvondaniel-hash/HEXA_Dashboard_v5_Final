@@ -55,6 +55,9 @@ def S(name, **kw):
 
 section_style = S("Sec", fontName="Helvetica-Bold", fontSize=10, textColor=WHITE, leading=13)
 label_style = S("Lbl", fontName="Helvetica-Bold", fontSize=7.5, textColor=NAVY)
+# Style "header blanc" : utilise pour les premieres lignes de tableaux a fond fonce
+# car la couleur d'un Paragraph s'impose sur le TEXTCOLOR du TableStyle.
+header_white_style = S("HdrW", fontName="Helvetica-Bold", fontSize=7.5, textColor=WHITE)
 value_style = S("Val", fontName="Helvetica-Bold", fontSize=9, textColor=NAVY)
 small_style = S("Sm", fontName="Helvetica", fontSize=6.5, textColor=GREY_TEXT)
 note_style = S("Nt", fontName="Helvetica-Oblique", fontSize=6, textColor=GREY_TEXT)
@@ -131,11 +134,15 @@ def credit_spread_color(v, asset_class="ig"):
 
 
 def fmt_bps(v):
-    """Formate une valeur de spread credit en 'XX bps' ou 'N/D'."""
+    """Formate une valeur de spread credit en 'XX bps' ou 'N/D'. Idempotent : '69 bps' -> '69 bps'."""
+    if v is None:
+        return "N/D"
+    # parse_pct enleve deja les unites '%', 'bps', 'pb' avant de convertir
     vf = parse_pct(v)
     if vf is None:
         return "N/D"
-    # Si la valeur est exprimee en % (< 10), on convertit en bps
+    # Si la valeur originale etait en % (< 10), on convertit en bps (1% = 100 bps)
+    # Sinon on garde tel quel
     if vf < 10:
         vf = vf * 100
     return f"{vf:.0f} bps"
@@ -368,6 +375,9 @@ def generate_pdf(data, output_path):
     arw_fg, col_fg = arrow(fg["val"], fg["prev"])
     arw_vx, col_vx = arrow(vix["val"], vix["prev"])
     arw_sp, col_sp = arrow(sp["spread"], sp["spread_prev"])
+    # Format unifie : le PDF n'ajoute jamais " bps" si la valeur le contient deja
+    sp_val_str  = fmt_bps(sp["spread"])
+    sp_prev_str = fmt_bps(sp["spread_prev"])
     t_stress = Table([
         [Paragraph("CNN Fear & Greed", label_style),
          Paragraph("VIX - Volatilite S&P 500", label_style),
@@ -376,12 +386,11 @@ def generate_pdf(data, output_path):
                    f'<font color="#{h(fc)}"><b>{fg["label"]}</b></font>', value_style),
          Paragraph(f'<font size="20"><b>{vix["val"]}</b></font><br/>'
                    f'<font size="7" color="#5D6D7E">CBOE</font>', value_style),
-         # Correction "bps pb" -> "bps" seulement
-         Paragraph(f'<font size="20"><b>{sp["spread"]} bps</b></font><br/>'
+         Paragraph(f'<font size="20"><b>{sp_val_str}</b></font><br/>'
                    f'<font size="7" color="#5D6D7E">OAT {sp["oat"]} | Bund {sp["bund"]}</font>', value_style)],
         [Paragraph(f'Veille:{fg["prev"]} <font color="#{h(col_fg)}">{arw_fg}</font> | A-1:{fg["n1"]}', small_style),
          Paragraph(f'Veille:{vix["prev"]} ({vix["prev_date"]}) <font color="#{h(col_vx)}">{arw_vx}</font> | A-1:{vix["n1"]}', small_style),
-         Paragraph(f'Prec.:{sp["spread_prev"]} bps <font color="#{h(col_sp)}">{arw_sp}</font>', small_style)],
+         Paragraph(f'Prec.:{sp_prev_str} <font color="#{h(col_sp)}">{arw_sp}</font>', small_style)],
         [Paragraph(fg["source"], note_style),
          Paragraph(vix["source"], note_style),
          Paragraph(sp["source"], note_style)]],
@@ -406,6 +415,11 @@ def generate_pdf(data, output_path):
 
     arw_curve, col_curve = arrow(usc["spread"], usc["spread_prev"])
     sc = spread_color(usc["spread"])
+    # Affichage propre du Prec. quand il est N/D
+    usc_spread_v = parse_pct(usc.get("spread", "N/D"))
+    usc_prev_v   = parse_pct(usc.get("spread_prev", "N/D"))
+    usc_main_str = f'{usc_spread_v:+.2f}%' if usc_spread_v is not None else "N/D"
+    usc_prev_str = f'{usc_prev_v:+.2f}%'   if usc_prev_v   is not None else "N/D"
 
     # Format unifie en bps pour IG/HY (correction du melange %/bps)
     ig_bps = fmt_bps(cs["ig_spread"])
@@ -423,7 +437,7 @@ def generate_pdf(data, output_path):
         [Paragraph("Courbe des taux US (2ans/10ans)", label_style),
          Paragraph("Spreads credit (IG / HY)", label_style)],
         [Paragraph(
-            f'<font size="18" color="#{h(sc)}"><b>{usc["spread"]}%</b></font><br/>'
+            f'<font size="18" color="#{h(sc)}"><b>{usc_main_str}</b></font><br/>'
             f'<font size="7" color="#5D6D7E">US 2 ans : {usc["us_2y"]} | US 10 ans : {usc["us_10y"]}</font>',
             value_style),
          Paragraph(
@@ -432,7 +446,7 @@ def generate_pdf(data, output_path):
             value_style)],
         [Paragraph(
             f'<font color="#{h(sc)}"><b>Signal : {usc["signal"]}</b></font> — '
-            f'Prec. : {usc["spread_prev"]}% <font color="#{h(col_curve)}">{arw_curve}</font><br/>'
+            f'Prec. : {usc_prev_str} <font color="#{h(col_curve)}">{arw_curve}</font><br/>'
             f'<font size="6" color="#C0392B">Inversion = signal historique de recession a 12-18 mois</font>',
             small_style),
          Paragraph(
@@ -741,13 +755,22 @@ def generate_pdf(data, output_path):
     story += [sec_hdr("11  |  TAUX DE REFERENCE - IMMOBILIER & CREDIT PRIVE"), Spacer(1, 2 * mm)]
     e = data["euribor"]
     immo_t = data["immobilier_taux"]
+    # Affichage propre du Prec. / A-1 Euribor : evite "N/D (N/D)"
+    def _fmt_period(v, d):
+        if not v or v == "N/D":
+            return "N/D"
+        if not d or d == "N/D":
+            return v
+        return f'{v} ({d})'
+    e_prev_str = _fmt_period(e["prev"], e["prev_date"])
+    e_n1_str   = _fmt_period(e["n1"],   e["n1_date"])
     taux_hdr = ["Taux", "Valeur actuelle", "Prec.", "A-1", "Role & Commentaire"]
     taux_cw = [36 * mm, 24 * mm, 28 * mm, 24 * mm, 46 * mm]
     taux_rows = [
         [Paragraph("Euribor 3 mois", label_style),
          Paragraph(f'<font color="#{h(GREEN)}"><b>{e["val"]}</b></font>', value_style),
-         Paragraph(f'{e["prev"]} ({e["prev_date"]})', small_style),
-         Paragraph(f'{e["n1"]} ({e["n1_date"]})', small_style),
+         Paragraph(e_prev_str, small_style),
+         Paragraph(e_n1_str, small_style),
          Paragraph("Taux court terme BCE. Indexe credits immo variables et dettes LBO.", note_style)],
         [Paragraph("OAT 10 ans (France)", label_style),
          Paragraph(f'<font color="#{h(ORANGE)}"><b>{data["spread"]["oat"]}</b></font>', value_style),
@@ -781,15 +804,29 @@ def generate_pdf(data, output_path):
     pe = data["private_equity"]
     argos = pe["argos"]
     sw3 = col_w / 3
+
+    # Helper local : adapte la taille de la police selon la longueur de la chaine pour eviter le debordement
+    def _kpi_font_size(s, ref_chars=8):
+        n = len(str(s))
+        if n <= ref_chars:    return 24
+        if n <= ref_chars+4:  return 20
+        if n <= ref_chars+8:  return 16
+        if n <= ref_chars+14: return 13
+        return 11
+
+    argos_size = _kpi_font_size(argos[0])
+    dp_size    = _kpi_font_size(pe["dp"][0])
+    rdt_size   = _kpi_font_size(pe["rdt"][0])
+
     t_kpi = Table([
         [Paragraph("Multiple EV/EBITDA Mid-Market", label_style),
          Paragraph("Dry Powder mondial", label_style),
          Paragraph("Rendement net PE France (10 ans)", label_style)],
-        [Paragraph(f'<font size="24" color="#{h(NAVY_LIGHT)}"><b>{argos[0]}</b></font><br/>'
+        [Paragraph(f'<font size="{argos_size}" color="#{h(NAVY_LIGHT)}"><b>{argos[0]}</b></font><br/>'
                    f'<font size="7" color="#5D6D7E">Indice Argos Mid-Market</font>', value_style),
-         Paragraph(f'<font size="20" color="#{h(TURQUOISE)}"><b>{pe["dp"][0]}</b></font><br/>'
+         Paragraph(f'<font size="{dp_size}" color="#{h(TURQUOISE)}"><b>{pe["dp"][0]}</b></font><br/>'
                    f'<font size="7" color="#5D6D7E">{pe["dp"][1]} {pe["dp"][2]}</font>', value_style),
-         Paragraph(f'<font size="24" color="#{h(GREEN)}"><b>{pe["rdt"][0]}</b></font><br/>'
+         Paragraph(f'<font size="{rdt_size}" color="#{h(GREEN)}"><b>{pe["rdt"][0]}</b></font><br/>'
                    f'<font size="7" color="#5D6D7E">{pe["rdt"][1]}</font>', value_style)],
         [Paragraph(f'Prec. : {argos[1]} ({argos[2]})<br/>A-1 : {argos[3]} ({argos[4]})<br/>'
                    f'<font color="#{h(RED)}">Compression des multiples</font>', small_style),
@@ -813,7 +850,7 @@ def generate_pdf(data, output_path):
     story += [t_kpi, Spacer(1, 3 * mm)]
 
     fi_hdr = ["Indicateur", "Dernier publie", "Var.", "Commentaire"]
-    fi_cw = [42 * mm, 24 * mm, 22 * mm, 70 * mm]
+    fi_cw = [40 * mm, 24 * mm, 32 * mm, 62 * mm]
     fi_rows = [
         [Paragraph("Levees de fonds", label_style),
          Paragraph(f'<b>{pe["levees"][0]}</b>', value_style),
@@ -950,13 +987,14 @@ def generate_pdf(data, output_path):
 
     # ── 14. IMMOBILIER MARCHE (etait 15) ─────────────────────────────────────
     # CORRECTION : ligne "Taux credit 20 ans" supprimee car deja en Section 11
+    # CORRECTION : header_white_style pour rendre l'entete visible (fond NAVY_LIGHT)
     story += [sec_hdr("14  |  IMMOBILIER FRANCE - MARCHE LOCATIF"), Spacer(1, 2 * mm)]
     immo_table = Table([
-        [Paragraph("Indicateur", label_style),
-         Paragraph("Valeur", label_style),
-         Paragraph("Ref. precedente", label_style),
-         Paragraph("A-1", label_style),
-         Paragraph("Commentaire", label_style)],
+        [Paragraph("Indicateur", header_white_style),
+         Paragraph("Valeur", header_white_style),
+         Paragraph("Ref. precedente", header_white_style),
+         Paragraph("A-1", header_white_style),
+         Paragraph("Commentaire", header_white_style)],
         [Paragraph("Bureaux vacants IDF (taux)", value_style),
          Paragraph(f'<b>{immo_t["bureaux_val"]}</b>', value_style),
          Paragraph(immo_t["bureaux_prev"], small_style),
