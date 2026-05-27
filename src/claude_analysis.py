@@ -283,12 +283,19 @@ def fetch_all_dynamic_data(client, mois: str, annee: int, data: dict) -> dict:
         '- Taux directeurs (PBoC, Fed, BCB Selic, RBI Repo) : TOUJOURS avec "%". Exemple : "3.00%", "10.75%".\n'
         '- PMI : nombre seul SANS unite ni mention. Exemple : "48.9", PAS "48.9 (contraction)".\n'
         '- NFP : nombre brut avec signe. Exemple : "+115000" ou "+115,000".\n'
-        '- Pour Amerique latine et Asie ex-Chine : prendre les agregats regionaux FMI WEO les plus recents '
-        '(PIB et CPI annuels ou trimestriels selon dispo). Periode = annee ou trimestre.\n'
-        f'Recherche : 1) PMI S&P Global/HCOB/Caixin {mois} {annee} (4 grandes zones + agregats Latam et Asie ex-Chine si dispos) '
+        '- Periode PMI : TOUJOURS un mois ("Mai 2026"), JAMAIS un trimestre ("Q2 2026" ou "T2 2026"). '
+        'Les PMI Composite sont des indicateurs mensuels.\n'
+        '- ZONES EMERGENTES (CRITIQUE) : pour "emerging_zones.latam" et "emerging_zones.asie_ex_chine", '
+        'remplir IMPERATIVEMENT gdp_val et cpi_val avec les agregats regionaux FMI WEO (rapport WEO d\'avril ou octobre le plus recent). '
+        'Exemple Latam : gdp_val="2.5%", gdp_period="2025", cpi_val="5.0%", cpi_period="2025". '
+        'Exemple Asie ex-Chine : gdp_val="4.5%", gdp_period="2025", cpi_val="2.3%", cpi_period="2025". '
+        'Ces valeurs sont obligatoires pour le rendu PDF.\n'
+        f'Recherche : 1) PMI S&P Global/HCOB/Caixin {mois} {annee} (4 grandes zones, periode en MOIS) '
         f'2) PIB CPI Chine {annee} '
         f'3) CPI flash France Zone Euro {mois} {annee} '
-        f'4) PIB / CPI / taux directeurs Amerique latine (Bresil Selic) et Asie ex-Chine (Inde RBI Repo) {annee}'
+        f'4) FMI WEO {annee} agregat Amerique latine et Caraibes : projection PIB et inflation annuelle '
+        f'5) FMI WEO {annee} agregat emerging Asia excluding China : projection PIB et inflation annuelle '
+        f'6) BCB Brasil Selic decision la plus recente + RBI India Repo Rate decision la plus recente'
         + fallback_keys
     )
 
