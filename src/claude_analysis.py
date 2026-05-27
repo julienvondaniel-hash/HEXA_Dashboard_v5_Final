@@ -83,6 +83,41 @@ def call_simple(client, prompt: str) -> str:
     return response.content[0].text
 
 
+def _strip_unit(s, units=("bps", "pb", "%")):
+    """Enleve les suffixes d'unite d'une valeur numerique pour eviter les doubles unites en sortie PDF.
+    Garde la valeur brute (ex : '69 bps' -> '69', '0.91%' -> '0.91')."""
+    if not s or not isinstance(s, str):
+        return s
+    out = s.strip()
+    for u in units:
+        if out.lower().endswith(u.lower()):
+            out = out[: -len(u)].strip()
+    return out
+
+
+def _strip_unit_pct_only(s):
+    """Comme _strip_unit, mais ne touche pas aux 'bps'. Pour les valeurs OAT/Bund qui gardent leur %."""
+    if not s or not isinstance(s, str):
+        return s
+    return s.strip()
+
+
+def _ensure_pct(s):
+    """Garantit qu'une valeur a le symbole % si elle est purement numerique."""
+    if not s or not isinstance(s, str):
+        return s
+    st = s.strip()
+    if not st or st.upper() == "N/D":
+        return st
+    if "%" in st:
+        return st
+    try:
+        float(st.replace(",", "."))
+        return st + "%"
+    except ValueError:
+        return st
+
+
 def _need_gdp_fallback(data: dict) -> dict:
     """Identifie les zones PIB dont la collecte API a echoue."""
     need = {}
@@ -98,6 +133,16 @@ def _need_fed_fallback(data: dict) -> bool:
     return not v or v == "N/D"
 
 
+def _need_euribor_fallback(data: dict) -> bool:
+    v = data.get("euribor", {}).get("val", "N/D")
+    return not v or v == "N/D"
+
+
+def _need_spread_fallback(data: dict) -> bool:
+    v = data.get("spread", {}).get("spread", "N/D")
+    return not v or v == "N/D"
+
+
 def fetch_all_dynamic_data(client, mois: str, annee: int, data: dict) -> dict:
     """
     Recherche web en 3 passes.
@@ -106,12 +151,13 @@ def fetch_all_dynamic_data(client, mois: str, annee: int, data: dict) -> dict:
     """
     result = {}
 
-    # ── Passe 1 : PMI + Chine + CPI flash + fallback PIB/Fed si APIs HS ──────
+    # ── Passe 1 : PMI + Chine + CPI flash + fallback PIB/Fed/Euribor si APIs HS ──
     gdp_need = _need_gdp_fallback(data)
     fed_need = _need_fed_fallback(data)
+    eur_need = _need_euribor_fallback(data)
     fallback_block = ""
     fallback_keys = ""
-    if gdp_need or fed_need:
+    if gdp_need or fed_need or eur_need:
         gdp_zones = ", ".join(gdp_need.keys()) if gdp_need else "aucune"
         extra = []
         if gdp_need:
@@ -120,11 +166,14 @@ def fetch_all_dynamic_data(client, mois: str, annee: int, data: dict) -> dict:
                                    for z in gdp_need.keys()]) + "}")
         if fed_need:
             extra.append('"fed_fallback":{"val":"","prev":"","prev_period":"","source":""}')
+        if eur_need:
+            extra.append('"euribor_fallback":{"val":"","date":"","prev":"","prev_date":"","n1":"","n1_date":""}')
         fallback_block = "," + ",".join(extra)
-        fallback_keys = (
-            f" + Fallback : PIB trimestriel le plus recent pour {gdp_zones}"
-            + (" + Fed funds rate (upper bound) actuel" if fed_need else "")
-        )
+        parts = []
+        if gdp_need: parts.append(f"PIB trimestriel le plus recent pour {gdp_zones}")
+        if fed_need: parts.append("Fed funds rate (upper bound) actuel")
+        if eur_need: parts.append("Euribor 3 mois actuel et historique")
+        fallback_keys = " + Fallback : " + " + ".join(parts)
 
     prompt1 = (
         f'Recherche pour {mois} {annee}. Reponds UNIQUEMENT avec ce JSON :\n'
@@ -138,6 +187,9 @@ def fetch_all_dynamic_data(client, mois: str, annee: int, data: dict) -> dict:
         '"cpi_flash":{"france_val":"","france_period":"","france_prev":"","france_source":"",'
         '"ez_val":"","ez_period":"","ez_prev":"","ez_source":""}'
         + fallback_block + '}\n'
+        'IMPORTANT : pour les valeurs numeriques, ne mets PAS d\'unite dans la chaine. '
+        'Exemple : "2.00%" et non "2.00% (bps)" ; "115000" et non "+115,000 emplois". '
+        'Pour les valeurs PMI, mets juste le nombre : "48.9" et non "48.9 (contraction)".\n'
         f'Recherche : 1) PMI S&P Global/HCOB/Caixin {mois} {annee} '
         f'2) PIB CPI Chine {annee} '
         f'3) CPI flash France Zone Euro {mois} {annee}'
@@ -170,6 +222,19 @@ def fetch_all_dynamic_data(client, mois: str, annee: int, data: dict) -> dict:
         '"cessions":{"val":"","var":"","periode":""},'
         '"nb_ent":{"val":"","var":"","periode":""},'
         '"rdt":{"val":"","var":"","periode":""}}}\n'
+        'REGLES DE FORMAT STRICTES :\n'
+        '- Spreads OAT/Bund, IG, HY, courbe US : valeur numerique SEULE sans unite. '
+        'Exemple : "69" et non "69 bps", "0.91" et non "0.91%", "80" et non "80 bps".\n'
+        '- oat et bund : avec le symbole %. Exemple : "3.75%".\n'
+        '- argos.val : "8.6x" (avec "x" pour le multiple).\n'
+        '- dry_powder.val : UNE seule valeur globale en T$. Exemple : "3.7" (en milliers de Md$). '
+        'Ne mets PAS "3.7 T$ (PE global) / 1.3 T$ (Buyout)" — separe dans `var` si besoin.\n'
+        '- dry_powder.var : courte description, ex "+4.6% vs 2024" ou "PE global, buyout 1.3T".\n'
+        '- rdt.val : UN seul pourcentage, ex "14.2%". Ne mets PAS "5.4% (moy) / 6.0% (evergreen)".\n'
+        '- rdt.var : courte description, ex "moyenne 10 ans" ou "TRI net 10 ans".\n'
+        '- nb_ent.val : nombre entier, ex "2692".\n'
+        '- levees/invest/cessions val : en Md€, ex "42.9 Md€".\n'
+        '- var : courte, ex "+10%" ou "-1%" ou "+9% valeur / -6% volume".\n'
         "Recherche : 1) Spread OAT/Bund 10 ans aujourd'hui (Banque de France/Bundesbank) "
         "2) Courbe US 2 ans / 10 ans aujourd'hui "
         "3) Spreads credit Investment Grade et High Yield (FRED BAMLC0A0CM / BAMLH0A0HYM2) "
@@ -218,6 +283,11 @@ def fetch_all_dynamic_data(client, mois: str, annee: int, data: dict) -> dict:
         '{"nom":"","gestionnaire":"","secteur":"","td":"","tof":"","prix_part":"","var_prix":"","note":""}],'
         '"analyse":"","points_vigilance":["","",""],"opportunites":["","",""]}}\n'
         f"Tendance par secteur SCPI : utilise EXACTEMENT l'un de ces symboles : haut, bas, stable.\n"
+        "REGLES DE FORMAT STRICTES :\n"
+        "- TD moyen par secteur : pourcentage ANNUEL (4,5%), JAMAIS trimestriel (pas de '/trim').\n"
+        "- TD moyen marche / SCPI phares / decote / TOF : SANS la mention '(annualise)'.\n"
+        "- Source prix immo : utiliser EXCLUSIVEMENT 'DVF/MeilleursAgents' ou 'Notaires de France' "
+        "pour rester coherent avec la legende. Pas de 'Qoridor', 'PAP', 'SeLoger' separes.\n"
         f"Recherche : 1) Taux credit immo 20 ans France {mois} {annee} CAFPI "
         "2) Bureaux vacants IDF CBRE JLL dernier trimestre "
         "3) Prix m2 Paris Lyon Tassin-la-Demi-Lune Saint-Foy-les-Lyon Maisons-Laffitte Le Vesinet Chatou Saint-Germain-en-Laye "
@@ -235,6 +305,34 @@ def fetch_all_dynamic_data(client, mois: str, annee: int, data: dict) -> dict:
                         "▲": "▲", "▼": "▼", "▶": "▶"}
             for s in parsed.get("scpi", {}).get("par_secteur", []):
                 s["tendance"] = tend_map.get(s.get("tendance", "").strip().lower(), "▶")
+                # Normalisation TD : enleve "/trim" et convertit en annuel si necessaire
+                td = s.get("td", "").strip()
+                if "/trim" in td.lower() or "trimestriel" in td.lower():
+                    # Extraire valeur et la multiplier par 4
+                    import re
+                    m = re.search(r"([\d.,]+)", td)
+                    if m:
+                        try:
+                            v = float(m.group(1).replace(",", "."))
+                            s["td"] = f"{v*4:.1f}%"
+                        except ValueError:
+                            s["td"] = td.replace("/trim", "").replace("/trimestriel", "").strip()
+                    else:
+                        s["td"] = td.replace("/trim", "").replace("/trimestriel", "").strip()
+                # S'assurer d'avoir le %
+                if s.get("td") and "%" not in s["td"]:
+                    s["td"] = s["td"] + "%"
+            # Nettoyage TD marche / TOF / decote / SCPI phares : retirer "(annualise)"
+            mkt = parsed.get("scpi", {}).get("marche", {})
+            for k in ("td_moyen", "td_moyen_prev", "td_moyen_n1", "tof_moyen", "decote_secondaire", "decote_prev"):
+                v = mkt.get(k, "")
+                if isinstance(v, str):
+                    mkt[k] = v.replace("(annualise)", "").replace("(annualisé)", "").strip()
+            for sp in parsed.get("scpi", {}).get("scpi_phares", []):
+                for k in ("td", "tof"):
+                    v = sp.get(k, "")
+                    if isinstance(v, str):
+                        sp[k] = v.replace("(annualise)", "").replace("(annualisé)", "").strip()
             result.update(parsed)
             print("  Passe 3 OK")
     except Exception as e:
@@ -383,10 +481,21 @@ def _inject_dynamic(data: dict, dynamic: dict):
     fed_fb = dynamic.get("fed_fallback", {})
     if fed_fb.get("val") and data.get("fed_rate", {}).get("val", "N/D") == "N/D":
         data["fed_rate"] = {
-            "val": fed_fb["val"], "period": "courant",
-            "prev": fed_fb.get("prev", "N/D"), "prev_period": fed_fb.get("prev_period", "N/D"),
+            "val": _ensure_pct(fed_fb["val"]), "period": "courant",
+            "prev": _ensure_pct(fed_fb.get("prev", "N/D")),
+            "prev_period": fed_fb.get("prev_period", "N/D"),
             "n1": "N/D", "n1_period": "N/D",
             "source": fed_fb.get("source") or "Fed via web_search",
+        }
+
+    # Fallback Euribor
+    eur_fb = dynamic.get("euribor_fallback", {})
+    if eur_fb.get("val") and data.get("euribor", {}).get("val", "N/D") == "N/D":
+        data["euribor"] = {
+            "val":  _ensure_pct(eur_fb["val"]),         "date":      eur_fb.get("date", "N/D"),
+            "prev": _ensure_pct(eur_fb.get("prev","N/D")),"prev_date": eur_fb.get("prev_date", "N/D"),
+            "n1":   _ensure_pct(eur_fb.get("n1","N/D")), "n1_date":   eur_fb.get("n1_date", "N/D"),
+            "source": "ECB SDW (Euribor 3M, web_search)",
         }
 
     # Immo taux
@@ -411,31 +520,63 @@ def _inject_dynamic(data: dict, dynamic: dict):
         for key in ["levees", "invest", "cessions", "nb_ent", "rdt"]:
             if key in fi and fi[key].get("val"):
                 d = fi[key]
-                pe[key] = (d.get("val", "N/D"), d.get("var", ""), d.get("periode", ""))
+                val = str(d.get("val", "N/D")).strip()
+                # Pour rdt : si la valeur contient un "/", on garde le premier nombre uniquement
+                # (ex: "5.4% (moy) / 6.0% (evergreen)" -> "5.4%" et detail dans var)
+                if key == "rdt" and "/" in val:
+                    import re
+                    m = re.search(r"([\d.,]+%?)", val)
+                    if m:
+                        val = m.group(1) if m.group(1).endswith("%") else m.group(1) + "%"
+                pe[key] = (val, d.get("var", ""), d.get("periode", ""))
     if "dry_powder" in dynamic and dynamic["dry_powder"].get("val"):
         dp = dynamic["dry_powder"]
-        pe["dp"] = (dp.get("val", "N/D"), dp.get("var", ""), dp.get("periode", ""))
+        val = str(dp.get("val", "N/D")).strip()
+        # Si la valeur contient "/", garder la premiere partie (ex: "3.7 T$ (PE) / 1.3 T$ (Buyout)")
+        if "/" in val:
+            val = val.split("/")[0].strip()
+        # S'assurer du suffixe Md$/T$ implicite : si juste un nombre, ajouter "T$"
+        if val and val[-1].isdigit():
+            val = val + " T$"
+        pe["dp"] = (val, dp.get("var", ""), dp.get("periode", ""))
 
-    # Spread OAT/Bund
+    # Spread OAT/Bund - on enleve toute unite parasite (Claude tend a renvoyer "69 bps")
     if "spread_oat_bund" in dynamic and dynamic["spread_oat_bund"].get("oat"):
         sp = dynamic["spread_oat_bund"]
         data["spread"] = {
-            "spread": sp.get("spread", "N/D"), "spread_prev": sp.get("spread_prev", "N/D"),
-            "oat": sp.get("oat", "N/D"), "bund": sp.get("bund", "N/D"),
-            "source": sp.get("source", "web_search"),
+            "spread":      _strip_unit(sp.get("spread", "N/D")),
+            "spread_prev": _strip_unit(sp.get("spread_prev", "N/D")),
+            "oat":         _ensure_pct(sp.get("oat", "N/D")),
+            "bund":        _ensure_pct(sp.get("bund", "N/D")),
+            "source":      sp.get("source", "web_search"),
         }
 
-    # Credit spreads (uniquement si FRED a echoue)
+    # Credit spreads (uniquement si FRED a echoue) - meme normalisation
     if "credit_spreads" in dynamic and dynamic["credit_spreads"].get("ig_spread"):
         cs = dynamic["credit_spreads"]
         if data.get("credit_spreads", {}).get("ig_spread", "N/D") == "N/D":
-            data["credit_spreads"].update(cs)
+            data["credit_spreads"].update({
+                "ig_spread":      _strip_unit(cs.get("ig_spread", "N/D")),
+                "ig_spread_prev": _strip_unit(cs.get("ig_spread_prev", "N/D")),
+                "ig_spread_n1":   _strip_unit(cs.get("ig_spread_n1", "N/D")),
+                "hy_spread":      _strip_unit(cs.get("hy_spread", "N/D")),
+                "hy_spread_prev": _strip_unit(cs.get("hy_spread_prev", "N/D")),
+                "hy_spread_n1":   _strip_unit(cs.get("hy_spread_n1", "N/D")),
+                "source":         cs.get("source", "web_search"),
+            })
 
     # Courbe US 2/10 ans (uniquement si Yahoo a echoue)
     if "spread_us_curve" in dynamic and dynamic["spread_us_curve"].get("spread"):
         uc = dynamic["spread_us_curve"]
         if data.get("spread_us_curve", {}).get("spread", "N/D") == "N/D":
-            data["spread_us_curve"].update(uc)
+            data["spread_us_curve"].update({
+                "us_2y":       _ensure_pct(uc.get("us_2y", "N/D")),
+                "us_10y":      _ensure_pct(uc.get("us_10y", "N/D")),
+                "spread":      _strip_unit(uc.get("spread", "N/D")),
+                "spread_prev": _strip_unit(uc.get("spread_prev", "N/D")),
+                "signal":      uc.get("signal", "N/D"),
+                "source":      uc.get("source", "web_search"),
+            })
 
     # SCPI
     if "scpi" in dynamic and dynamic["scpi"].get("marche", {}).get("td_moyen"):
