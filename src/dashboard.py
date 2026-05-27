@@ -110,12 +110,35 @@ def fetch_ecb_rate():
              "?format=csvdata&startPeriod=2024-01-01&detail=dataonly")
         r=get(url)
         if r is None: raise Exception("timeout")
-        lines=[l for l in r.text.strip().split("\n") if l and not l.startswith("KEY") and not l.startswith("DATAFLOW")]
-        valid=[l for l in lines if l.split(",")[-1].strip() not in ("",".",)]
-        if not valid: raise Exception("pas de donnees")
-        last,prev=valid[-1].split(","),valid[-2].split(",")
-        return {"val":f"{float(last[-1]):.2f}%","detail":"Taux de depot BCE",
-                "prev":f"{float(prev[-1]):.2f}%","prev_period":prev[0],"source":"ECB SDW"}
+        # Le CSV ECB SDW commence par un header. La colonne TIME_PERIOD contient la date,
+        # OBS_VALUE la valeur. On les retrouve par leur nom plutot que par position.
+        raw_lines = [l for l in r.text.strip().split("\n") if l.strip()]
+        if not raw_lines: raise Exception("CSV vide")
+        header = [h.strip() for h in raw_lines[0].split(",")]
+        try:
+            date_idx = header.index("TIME_PERIOD")
+            val_idx  = header.index("OBS_VALUE")
+        except ValueError:
+            # Fallback : ancien format (date en pos 0, valeur en derniere colonne)
+            date_idx, val_idx = 0, -1
+        rows = []
+        for line in raw_lines[1:]:
+            cells = line.split(",")
+            if len(cells) <= max(date_idx, val_idx if val_idx>=0 else 0):
+                continue
+            d = cells[date_idx].strip()
+            v = cells[val_idx].strip()
+            if v in ("", "."): continue
+            try:
+                rows.append((d, float(v)))
+            except ValueError:
+                continue
+        if not rows: raise Exception("pas de donnees")
+        rows.sort(key=lambda x: x[0])
+        last_d, last_v = rows[-1]
+        prev_d, prev_v = rows[-2] if len(rows) >= 2 else rows[-1]
+        return {"val":f"{last_v:.2f}%","detail":"Taux de depot BCE",
+                "prev":f"{prev_v:.2f}%","prev_period":prev_d[:7],"source":"ECB SDW"}
     except Exception as e:
         print(f"  ECB SDW echoue: {e}")
         return {"val":"N/D","detail":"Taux de depot BCE","prev":"N/D","prev_period":"N/D","source":"ECB SDW (indisponible)"}
@@ -175,18 +198,38 @@ def fetch_euribor():
              "?format=csvdata&startPeriod=2024-01-01&detail=dataonly")
         r=get(url)
         if r is None: raise Exception("timeout")
-        lines=[l for l in r.text.strip().split("\n") if l and not l.startswith("KEY") and not l.startswith("DATAFLOW")]
-        valid=[l for l in lines if l.split(",")[-1].strip() not in ("",".",)]
-        if not valid: raise Exception("pas de donnees")
-        last=valid[-1].split(","); prev=valid[-2].split(",") if len(valid)>=2 else last
-        n1=valid[-252].split(",") if len(valid)>=252 else valid[0].split(",")
-        return {"val":f"{float(last[-1]):.3f}%","date":last[0],
-                "prev":f"{float(prev[-1]):.3f}%","prev_date":prev[0],
-                "n1":f"{float(n1[-1]):.3f}%","n1_date":n1[0],"source":"ECB SDW (Euribor 3M)"}
+        raw_lines = [l for l in r.text.strip().split("\n") if l.strip()]
+        if not raw_lines: raise Exception("CSV vide")
+        header = [h.strip() for h in raw_lines[0].split(",")]
+        try:
+            date_idx = header.index("TIME_PERIOD")
+            val_idx  = header.index("OBS_VALUE")
+        except ValueError:
+            date_idx, val_idx = 0, -1
+        rows = []
+        for line in raw_lines[1:]:
+            cells = line.split(",")
+            if len(cells) <= max(date_idx, val_idx if val_idx>=0 else 0):
+                continue
+            d = cells[date_idx].strip()
+            v = cells[val_idx].strip()
+            if v in ("", "."): continue
+            try:
+                rows.append((d, float(v)))
+            except ValueError:
+                continue
+        if not rows: raise Exception("pas de donnees")
+        rows.sort(key=lambda x: x[0])
+        last_d, last_v = rows[-1]
+        prev_d, prev_v = rows[-2] if len(rows) >= 2 else rows[-1]
+        n1_d,   n1_v   = rows[-252] if len(rows) >= 252 else rows[0]
+        return {"val":f"{last_v:.3f}%","date":last_d,
+                "prev":f"{prev_v:.3f}%","prev_date":prev_d,
+                "n1":f"{n1_v:.3f}%","n1_date":n1_d,"source":"ECB SDW (Euribor 3M)"}
     except Exception as e:
         print(f"  Euribor echoue: {e}")
         return {"val":"N/D","date":"N/D","prev":"N/D","prev_date":"N/D",
-                "n1":"N/D","n1_date":"N/D","source":"ECB SDW (indisponible)"}
+                "n1":"N/D","n1_date":"N/D","source":"ECB SDW (web_search en repli)"}
 
 def fetch_vix():
     try:
