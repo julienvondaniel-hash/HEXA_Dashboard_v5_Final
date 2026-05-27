@@ -9,8 +9,10 @@ import json
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; HEXADashboard/1.0)"}
 
-def get(url, timeout=45, retries=3):
-    """GET avec retry exponentiel et timeout genereux pour les APIs FRED/BEA souvent lentes."""
+def get(url, timeout=30, retries=2):
+    """GET avec 2 retries + backoff court.
+    Quand FRED/ECB sont en panne, la 3eme tentative ne recupere jamais rien,
+    donc on s'arrete plus tot pour reduire le temps total du run."""
     import time as _t
     for attempt in range(retries):
         try:
@@ -18,9 +20,9 @@ def get(url, timeout=45, retries=3):
             r.raise_for_status()
             return r
         except Exception as e:
-            print(f"  Tentative {attempt+1}/{retries} echouee: {e}")
+            print(f"  Tentative {attempt+1}/{retries} echouee: {e}", flush=True)
             if attempt < retries - 1:
-                _t.sleep(2 ** attempt)  # 1s, 2s, 4s entre tentatives
+                _t.sleep(1)  # 1s entre tentatives (au lieu de backoff exponentiel)
     return None
 
 def get_json(url, **kw):
@@ -559,11 +561,21 @@ def collect_all():
     data["gdp_emergents"]={"val":"N/D","period":"N/D","prev":"N/D","prev_period":"N/D","n1":"N/D","n1_period":"N/D","source":"FMI WEO (web_search)"}
     data["cpi_chine"]    ={"val":"N/D","period":"N/D","prev":"N/D","prev_period":"N/D","n1":"N/D","n1_period":"N/D","source":"NBS (web_search)"}
     data["pboc"]         ={"val":"N/D","prev":"N/D","detail":"LPR 1 an","source":"PBoC (web_search)"}
+    # Nouvelles zones emergentes v6.5.2 : Amerique latine + Asie ex-Chine
+    data["gdp_latam"]         ={"val":"N/D","period":"N/D","prev":"N/D","prev_period":"N/D","n1":"N/D","n1_period":"N/D","source":"FMI WEO (web_search)"}
+    data["cpi_latam"]         ={"val":"N/D","period":"N/D","prev":"N/D","prev_period":"N/D","n1":"N/D","n1_period":"N/D","source":"FMI WEO (web_search)"}
+    data["gdp_asie_ex_chine"] ={"val":"N/D","period":"N/D","prev":"N/D","prev_period":"N/D","n1":"N/D","n1_period":"N/D","source":"FMI WEO (web_search)"}
+    data["cpi_asie_ex_chine"] ={"val":"N/D","period":"N/D","prev":"N/D","prev_period":"N/D","n1":"N/D","n1_period":"N/D","source":"FMI WEO (web_search)"}
+    # Taux directeurs emergents : Bresil (Selic) et Inde (RBI Repo)
+    data["bcb_selic"] ={"val":"N/D","prev":"N/D","detail":"Taux Selic","source":"Banco Central do Brasil (web_search)"}
+    data["rbi_repo"]  ={"val":"N/D","prev":"N/D","detail":"Repo Rate","source":"Reserve Bank of India (web_search)"}
     data["pmi"]={
-        "france":{"val":"N/D","period":"N/D","prev":"N/D","source":"S&P Global / HCOB PMI"},
-        "usa":   {"val":"N/D","period":"N/D","prev":"N/D","source":"S&P Global PMI"},
-        "ez":    {"val":"N/D","period":"N/D","prev":"N/D","source":"HCOB / S&P Global PMI"},
-        "chine": {"val":"N/D","period":"N/D","prev":"N/D","source":"Caixin / S&P Global PMI"},
+        "france":       {"val":"N/D","period":"N/D","prev":"N/D","source":"S&P Global / HCOB PMI"},
+        "usa":          {"val":"N/D","period":"N/D","prev":"N/D","source":"S&P Global PMI"},
+        "ez":           {"val":"N/D","period":"N/D","prev":"N/D","source":"HCOB / S&P Global PMI"},
+        "chine":        {"val":"N/D","period":"N/D","prev":"N/D","source":"Caixin / S&P Global PMI"},
+        "latam":        {"val":"N/D","period":"N/D","prev":"N/D","source":"S&P Global PMI Bresil"},
+        "asie_ex_chine":{"val":"N/D","period":"N/D","prev":"N/D","source":"S&P Global PMI Inde"},
     }
     data["immobilier_taux"]={
         "taux_20ans":"N/D","taux_20ans_prev":"N/D","taux_20ans_n1":"N/D",
@@ -585,7 +597,7 @@ def collect_all():
                   "collecte_nette":"N/D","collecte_prev":"N/D","collecte_periode":"N/D",
                   "decote_secondaire":"N/D","decote_prev":"N/D","tof_moyen":"N/D",
                   "source":"ASPIM / MeilleuresSCPI (web_search)"},
-        "par_secteur":[],"scpi_phares":[],
+        "par_secteur":[],"scpi_top10":[],
         "analyse":"N/D","points_vigilance":[],"opportunites":[],
     }
 
