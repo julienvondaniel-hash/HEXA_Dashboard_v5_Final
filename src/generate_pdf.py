@@ -240,11 +240,15 @@ def generate_pdf(data, output_path):
     # ── 1. ACTIVITE & CROISSANCE ─────────────────────────────────────────────
     story += [sec_hdr("1  |  ACTIVITE & CROISSANCE"), Spacer(1, 2 * mm)]
     pib_hdr = ["Zone", "PIB", "Periode", "Prec.", "A-1", "Source"]
-    pib_cw = [26 * mm, 20 * mm, 26 * mm, 20 * mm, 22 * mm, 44 * mm]
+    pib_cw = [30 * mm, 20 * mm, 24 * mm, 18 * mm, 22 * mm, 44 * mm]
     rows = []
-    for zone, d in [("France", data["gdp_fr"]), ("Etats-Unis", data["gdp_usa"]),
-                    ("Zone Euro", data["gdp_ez"]), ("Emergents", data["gdp_emergents"]),
-                    ("Chine", data["gdp_chine"])]:
+    # Ordre v6.5.2 : France, Zone Euro, Etats-Unis, Chine, Amerique latine, Asie ex-Chine
+    for zone, d in [("France", data["gdp_fr"]),
+                    ("Zone Euro", data["gdp_ez"]),
+                    ("Etats-Unis", data["gdp_usa"]),
+                    ("Chine", data["gdp_chine"]),
+                    ("Amerique latine", data.get("gdp_latam", {"val":"N/D","period":"N/D","prev":"N/D","n1":"N/D","n1_period":"N/D","source":"FMI WEO (web_search)"})),
+                    ("Asie ex-Chine",  data.get("gdp_asie_ex_chine", {"val":"N/D","period":"N/D","prev":"N/D","n1":"N/D","n1_period":"N/D","source":"FMI WEO (web_search)"}))]:
         arw, ac = arrow(d["val"], d["prev"])
         gc = gdp_color(d["val"])
         rows.append([
@@ -259,9 +263,15 @@ def generate_pdf(data, output_path):
 
     # PMI
     pmi_hdr = ["Zone", "PMI Composite", "Mois", "Mois prec.", "Seuil", "Signal / Source"]
-    pmi_cw = [26 * mm, 22 * mm, 20 * mm, 20 * mm, 14 * mm, 56 * mm]
+    pmi_cw = [30 * mm, 22 * mm, 18 * mm, 18 * mm, 14 * mm, 56 * mm]
     rows = []
-    for zone, key in [("France", "france"), ("Etats-Unis", "usa"), ("Zone Euro", "ez"), ("Chine", "chine")]:
+    # Ordre v6.5.2 : France, Zone Euro, Etats-Unis, Chine, + Latam et Asie si dispos
+    pmi_zones = [("France", "france"), ("Zone Euro", "ez"), ("Etats-Unis", "usa"), ("Chine", "chine")]
+    if data["pmi"].get("latam", {}).get("val", "N/D") != "N/D":
+        pmi_zones.append(("Amerique latine", "latam"))
+    if data["pmi"].get("asie_ex_chine", {}).get("val", "N/D") != "N/D":
+        pmi_zones.append(("Asie ex-Chine", "asie_ex_chine"))
+    for zone, key in pmi_zones:
         pm = data["pmi"][key]
         val, prev = pm["val"], pm["prev"]
         arw, ac = arrow(val, prev)
@@ -309,13 +319,19 @@ def generate_pdf(data, output_path):
     story += [t_nfp, Spacer(1, 4 * mm)]
 
     # ── 2. INFLATION ─────────────────────────────────────────────────────────
-    # (Bandeau "CORRECTION" supprime - artefact editorial)
     story += [sec_hdr("2  |  INFLATION (IPC / CPI)"), Spacer(1, 2 * mm)]
     cpi_hdr = ["Zone", "IPC a/a", "Mois", "Mois prec.", "A-1", "Source"]
-    cpi_cw = [26 * mm, 20 * mm, 22 * mm, 22 * mm, 22 * mm, 46 * mm]
+    cpi_cw = [30 * mm, 20 * mm, 22 * mm, 22 * mm, 22 * mm, 42 * mm]
     rows = []
-    for zone, cd in [("France", data["cpi_fr"]), ("Etats-Unis", data["cpi_usa"]),
-                     ("Zone Euro", data["cpi_ez"]), ("Chine", data["cpi_chine"])]:
+    # Ordre v6.5.2 : France, Zone Euro, Etats-Unis, Chine, Amerique latine, Asie ex-Chine
+    cpi_default = {"val":"N/D","period":"N/D","prev":"N/D","prev_period":"N/D",
+                   "n1":"N/D","n1_period":"N/D","source":"FMI WEO (web_search)"}
+    for zone, cd in [("France", data["cpi_fr"]),
+                     ("Zone Euro", data["cpi_ez"]),
+                     ("Etats-Unis", data["cpi_usa"]),
+                     ("Chine", data["cpi_chine"]),
+                     ("Amerique latine", data.get("cpi_latam", cpi_default)),
+                     ("Asie ex-Chine",  data.get("cpi_asie_ex_chine", cpi_default))]:
         arw, ac = arrow(cd["val"], cd["prev"])
         cc = cpi_color(cd["val"])
         rows.append([
@@ -332,11 +348,18 @@ def generate_pdf(data, output_path):
     ecb = data["ecb_rate"]
     fed = data["fed_rate"]
     pboc = data["pboc"]
+    # Nouveaux taux directeurs v6.5.2 : BCB Selic (Bresil = proxy Amerique latine)
+    # et RBI Repo Rate (Inde = proxy Asie ex-Chine). Defaults a N/D si non collecte.
+    bcb = data.get("bcb_selic", {"val":"N/D","detail":"Taux Selic","prev":"N/D","source":"BCB (web_search)"})
+    rbi = data.get("rbi_repo",  {"val":"N/D","detail":"Repo Rate","prev":"N/D","source":"RBI (web_search)"})
     rates_hdr = ["Banque Centrale", "Taux actuel", "Detail", "Taux prec.", "Source"]
-    rates_cw = [36 * mm, 22 * mm, 36 * mm, 22 * mm, 42 * mm]
+    rates_cw = [40 * mm, 22 * mm, 36 * mm, 22 * mm, 38 * mm]
     arw_e, col_e = arrow(ecb["val"], ecb["prev"])
     arw_f, col_f = arrow(fed["val"], fed["prev"])
     arw_p, col_p = arrow(pboc["val"], pboc["prev"])
+    arw_b, col_b = arrow(bcb["val"], bcb["prev"])
+    arw_r, col_r = arrow(rbi["val"], rbi["prev"])
+    # Ordre v6.5.2 : BCE (Zone Euro), Fed, PBoC, BCB (Latam), RBI (Asie)
     rows = [
         [Paragraph("BCE (Zone Euro)", label_style),
          Paragraph(f'<b>{ecb["val"]}</b> <font color="#{h(col_e)}">{arw_e}</font>', value_style),
@@ -352,7 +375,17 @@ def generate_pdf(data, output_path):
          Paragraph(f'<b>{pboc["val"]}</b> <font color="#{h(col_p)}">{arw_p}</font>', value_style),
          Paragraph(pboc["detail"], small_style),
          Paragraph(pboc["prev"], small_style),
-         Paragraph(pboc["source"], note_style)]]
+         Paragraph(pboc["source"], note_style)],
+        [Paragraph("BCB Selic (Bresil)", label_style),
+         Paragraph(f'<b>{bcb["val"]}</b> <font color="#{h(col_b)}">{arw_b}</font>', value_style),
+         Paragraph(bcb.get("detail", "Taux Selic (Amerique latine)"), small_style),
+         Paragraph(bcb["prev"], small_style),
+         Paragraph(bcb["source"], note_style)],
+        [Paragraph("RBI Repo (Inde)", label_style),
+         Paragraph(f'<b>{rbi["val"]}</b> <font color="#{h(col_r)}">{arw_r}</font>', value_style),
+         Paragraph(rbi.get("detail", "Repo Rate (Asie ex-Chine)"), small_style),
+         Paragraph(rbi["prev"], small_style),
+         Paragraph(rbi["source"], note_style)]]
     story += [std_table(rates_hdr, rows, rates_cw), Spacer(1, 4 * mm)]
 
     # ── 4. STRESS FINANCIER ──────────────────────────────────────────────────
@@ -642,7 +675,7 @@ def generate_pdf(data, output_path):
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE')]))
     story += [t_cycle, Spacer(1, 2 * mm)]
-    story.append(note_box(f"Analyse HEXA : {data['commentaire_general']}"))
+    story.append(note_box(data['commentaire_general']))
 
     # Vigilance + Opportunites
     v_txt = "<b>Points de vigilance :</b><br/>" + "<br/>".join(f"• {v}" for v in data["claude_vigilance"])
@@ -748,7 +781,7 @@ def generate_pdf(data, output_path):
             Paragraph(d.get("source", "DVF"), note_style)])
     story.append(std_table(prix_hdr, rows, prix_cw))
     story += [Spacer(1, 2 * mm),
-              note_box(f"Analyse HEXA : {data['claude_synthese_immo']}"),
+              note_box(data['claude_synthese_immo']),
               Spacer(1, 4 * mm)]
 
     # ── 11. TAUX DE REFERENCE ────────────────────────────────────────────────
@@ -882,7 +915,7 @@ def generate_pdf(data, output_path):
     ]
     story.append(std_table(fi_hdr, fi_rows, fi_cw))
     story += [Spacer(1, 2 * mm),
-              note_box(f"Analyse HEXA : {data['claude_synthese_pe']}"),
+              note_box(data['claude_synthese_pe']),
               Spacer(1, 3 * mm)]
 
     # ── 13. SCPI ─────────────────────────────────────────────────────────────
@@ -949,16 +982,18 @@ def generate_pdf(data, output_path):
             Paragraph(s["commentaire"], small_style)])
     story += [std_table(sect_hdr, rows, sect_cw), Spacer(1, 3 * mm)]
 
-    # SCPI phares
-    story.append(Paragraph("<b>SCPI de reference — suivi mensuel :</b>",
+    # SCPI top 10 par collecte v6.5.2
+    story.append(Paragraph("<b>Top 10 SCPI par collecte nette — classement annuel :</b>",
                            S("st2", fontName="Helvetica-Bold", fontSize=8,
                              textColor=NAVY, spaceAfter=3)))
     story.append(Spacer(1, 1 * mm))
 
-    scpi_hdr = ["SCPI", "Gestionnaire", "Secteur", "TD", "TOF", "Prix part", "Var. prix", "Note"]
-    scpi_cw = [22 * mm, 22 * mm, 18 * mm, 14 * mm, 14 * mm, 16 * mm, 14 * mm, 38 * mm]
+    # Colonnes : Rang / SCPI / Gestionnaire / Secteur / Collecte / TD / TOF / Prix part / Var. prix / Note
+    scpi_hdr = ["#", "SCPI", "Gestionnaire", "Secteur", "Collecte", "TD", "TOF", "Prix part", "Var.", "Note"]
+    scpi_cw = [8 * mm, 22 * mm, 20 * mm, 17 * mm, 16 * mm, 14 * mm, 12 * mm, 14 * mm, 12 * mm, 23 * mm]
     rows = []
-    for s in scpi["scpi_phares"]:
+    top10 = scpi.get("scpi_top10", [])
+    for idx, s in enumerate(top10[:10], start=1):
         vp_raw = s.get("var_prix", "")
         if vp_raw.startswith("+"):
             vp_c = GREEN
@@ -967,17 +1002,28 @@ def generate_pdf(data, output_path):
         else:
             vp_c = GREY_TEXT
         rows.append([
-            Paragraph(f'<b>{s["nom"]}</b>', label_style),
-            Paragraph(s["gestionnaire"], small_style),
-            Paragraph(s["secteur"], small_style),
-            Paragraph(f'<font color="#{h(GREEN)}"><b>{s["td"]}</b></font>', value_style),
-            Paragraph(s["tof"], small_style),
-            Paragraph(f'<b>{s["prix_part"]}</b>', value_style),
-            Paragraph(f'<font color="#{h(vp_c)}"><b>{vp_raw}</b></font>', value_style),
-            Paragraph(s["note"], note_style)])
+            Paragraph(f"<b>{idx}</b>", value_style),
+            Paragraph(f'<b>{s.get("nom","N/D")}</b>', label_style),
+            Paragraph(s.get("gestionnaire", ""), small_style),
+            Paragraph(s.get("secteur", ""), small_style),
+            Paragraph(f'<b>{s.get("collecte", "N/D")}</b>', small_style),
+            Paragraph(f'<font color="#{h(GREEN)}"><b>{s.get("td","")}</b></font>', value_style),
+            Paragraph(s.get("tof", ""), small_style),
+            Paragraph(f'<b>{s.get("prix_part","")}</b>', small_style),
+            Paragraph(f'<font color="#{h(vp_c)}"><b>{vp_raw}</b></font>', small_style),
+            Paragraph(s.get("note", ""), note_style)])
+    # Si moins de 10 SCPI collectees, on n'affiche que celles disponibles avec une mention
+    if not rows:
+        rows.append([Paragraph("-", small_style)] * 10)
     story += [std_table(scpi_hdr, rows, scpi_cw), Spacer(1, 2 * mm)]
+    if 0 < len(top10) < 10:
+        story.append(Paragraph(
+            f"<i>{len(top10)} SCPI collectees sur 10 demandees. "
+            "Le reste sera complete au prochain run.</i>",
+            S("st2", fontName="Helvetica-Oblique", fontSize=7, textColor=GREY_TEXT, spaceAfter=2)))
+        story.append(Spacer(1, 1 * mm))
 
-    story.append(note_box(f'Analyse HEXA : {scpi["analyse"]}'))
+    story.append(note_box(scpi["analyse"]))
     story.append(Spacer(1, 2 * mm))
 
     v_scpi = "<b>Points de vigilance SCPI :</b><br/>" + "<br/>".join(f"• {v}" for v in scpi["points_vigilance"])
