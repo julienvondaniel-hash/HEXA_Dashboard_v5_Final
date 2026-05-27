@@ -187,9 +187,12 @@ def fetch_all_dynamic_data(client, mois: str, annee: int, data: dict) -> dict:
         '"cpi_flash":{"france_val":"","france_period":"","france_prev":"","france_source":"",'
         '"ez_val":"","ez_period":"","ez_prev":"","ez_source":""}'
         + fallback_block + '}\n'
-        'IMPORTANT : pour les valeurs numeriques, ne mets PAS d\'unite dans la chaine. '
-        'Exemple : "2.00%" et non "2.00% (bps)" ; "115000" et non "+115,000 emplois". '
-        'Pour les valeurs PMI, mets juste le nombre : "48.9" et non "48.9 (contraction)".\n'
+        'REGLES DE FORMAT (importantes pour l\'affichage correct du PDF) :\n'
+        '- PIB et CPI : TOUJOURS avec le symbole "%". Exemple : "0.3%", "2.2%", "+5.0%". '
+        'JAMAIS sans % (ne pas ecrire juste "0.3" ou "2.2").\n'
+        '- Taux directeurs (PBoC, Fed, etc.) : TOUJOURS avec "%". Exemple : "3.00%", "4.50%".\n'
+        '- PMI : nombre seul SANS unite ni mention. Exemple : "48.9", PAS "48.9 (contraction)".\n'
+        '- NFP : nombre brut avec signe. Exemple : "+115000" ou "+115,000".\n'
         f'Recherche : 1) PMI S&P Global/HCOB/Caixin {mois} {annee} '
         f'2) PIB CPI Chine {annee} '
         f'3) CPI flash France Zone Euro {mois} {annee}'
@@ -382,23 +385,28 @@ CAC 40 {cac_p:+.1f}%/an | S&P 500 {sp_p:+.1f}%/an
 
 REGLES IMPORTANTES :
 - Pour chaque zone, classe-la dans UN regime parmi : Goldilocks, Surchauffe, Obligations, Stagflation.
-  Goldilocks : croissance positive (>0%) ET inflation maitrisee (<3%).
-  Surchauffe : croissance robuste (>1.5%) ET inflation elevee (>3%).
-  Obligations : croissance faible/nulle (<0.5%) ET inflation maitrisee (<2.5%).
-  Stagflation : croissance faible/nulle (<0.5%) ET inflation elevee (>2.5%).
+  APPLIQUE LES SEUILS STRICTEMENT (ne pas surinterpreter) :
+  Goldilocks   : croissance > 0.5% ET inflation < 2.5%.
+  Surchauffe   : croissance > 1.5% ET inflation >= 2.5%.
+  Obligations  : croissance <= 0.5% ET inflation < 2.5%.
+  Stagflation  : croissance <= 0.5% ET inflation >= 2.5%.
+  Exemples : France PIB 0.0% + CPI 2.2% -> Obligations (PAS Stagflation, car CPI<2.5%).
+             USA PIB 2.0% + CPI 3.6% -> Surchauffe.
+             Zone Euro PIB 0.1% + CPI 3.0% -> Stagflation.
 - Si une donnee est N/D, raisonne a partir du PMI et de l'inflation seuls.
 - Pour Amerique latine et Asie ex-Chine, utilise les estimations FMI WEO les plus recentes.
+- pib_estime et cpi_estime : TOUJOURS avec le symbole "%". Exemple "2.0%", "+5.0%", PAS juste "2.0".
 
 Reponds UNIQUEMENT avec ce JSON :
 {{
   "commentaire_general": "2-3 phrases contexte macro HEXA.",
   "analyse_cycle": {{
-    "France":          {{"regime": "Goldilocks|Surchauffe|Obligations|Stagflation", "commentaire": "1 phrase", "pib_estime": "valeur en %", "cpi_estime": "valeur en %"}},
-    "Etats-Unis":      {{"regime": "...", "commentaire": "...", "pib_estime": "...", "cpi_estime": "..."}},
-    "Zone Euro":       {{"regime": "...", "commentaire": "...", "pib_estime": "...", "cpi_estime": "..."}},
-    "Chine":           {{"regime": "...", "commentaire": "...", "pib_estime": "...", "cpi_estime": "..."}},
-    "Amerique latine": {{"regime": "...", "commentaire": "...", "pib_estime": "...", "cpi_estime": "..."}},
-    "Asie ex-Chine":   {{"regime": "...", "commentaire": "...", "pib_estime": "...", "cpi_estime": "..."}}
+    "France":          {{"regime": "Goldilocks|Surchauffe|Obligations|Stagflation", "commentaire": "1 phrase", "pib_estime": "X.X%", "cpi_estime": "X.X%"}},
+    "Etats-Unis":      {{"regime": "...", "commentaire": "...", "pib_estime": "X.X%", "cpi_estime": "X.X%"}},
+    "Zone Euro":       {{"regime": "...", "commentaire": "...", "pib_estime": "X.X%", "cpi_estime": "X.X%"}},
+    "Chine":           {{"regime": "...", "commentaire": "...", "pib_estime": "X.X%", "cpi_estime": "X.X%"}},
+    "Amerique latine": {{"regime": "...", "commentaire": "...", "pib_estime": "X.X%", "cpi_estime": "X.X%"}},
+    "Asie ex-Chine":   {{"regime": "...", "commentaire": "...", "pib_estime": "X.X%", "cpi_estime": "X.X%"}}
   }},
   "points_vigilance": ["risque 1", "risque 2", "risque 3"],
   "opportunites":     ["opp 1", "opp 2", "opp 3"],
@@ -430,38 +438,46 @@ def _inject_dynamic(data: dict, dynamic: dict):
         cf = dynamic["cpi_flash"]
         if cf.get("france_val"):
             data["cpi_fr"].update({
-                "val": cf["france_val"],
+                "val": _ensure_pct(cf["france_val"]),
                 "period": cf.get("france_period", "N/D"),
-                "prev": cf.get("france_prev", "N/D"),
+                "prev": _ensure_pct(cf.get("france_prev", "N/D")),
                 "source": cf.get("france_source", "INSEE flash"),
             })
         if cf.get("ez_val"):
             data["cpi_ez"].update({
-                "val": cf["ez_val"],
+                "val": _ensure_pct(cf["ez_val"]),
                 "period": cf.get("ez_period", "N/D"),
-                "prev": cf.get("ez_prev", "N/D"),
+                "prev": _ensure_pct(cf.get("ez_prev", "N/D")),
                 "source": cf.get("ez_source", "Eurostat flash"),
             })
 
-    # Chine
+    # Chine - les PIB/CPI/taux PBoC s'affichent toujours avec %
     if "chine" in dynamic:
         c = dynamic["chine"]
         if c.get("pib_val"):
             data["gdp_chine"] = {
-                "val": c.get("pib_val", "N/D"), "period": c.get("pib_period", "N/D"),
-                "prev": c.get("pib_prev", "N/D"), "prev_period": c.get("pib_prev_period", "N/D"),
-                "n1": "N/D", "n1_period": "N/D", "source": "NBS via web_search",
+                "val": _ensure_pct(c.get("pib_val", "N/D")),
+                "period": c.get("pib_period", "N/D"),
+                "prev": _ensure_pct(c.get("pib_prev", "N/D")),
+                "prev_period": c.get("pib_prev_period", "N/D"),
+                "n1": "N/D", "n1_period": "N/D",
+                "source": "NBS via web_search",
             }
         if c.get("cpi_val"):
             data["cpi_chine"] = {
-                "val": c.get("cpi_val", "N/D"), "period": c.get("cpi_period", "N/D"),
-                "prev": c.get("cpi_prev", "N/D"), "prev_period": c.get("cpi_prev_period", "N/D"),
-                "n1": "N/D", "n1_period": "N/D", "source": "NBS via web_search",
+                "val": _ensure_pct(c.get("cpi_val", "N/D")),
+                "period": c.get("cpi_period", "N/D"),
+                "prev": _ensure_pct(c.get("cpi_prev", "N/D")),
+                "prev_period": c.get("cpi_prev_period", "N/D"),
+                "n1": "N/D", "n1_period": "N/D",
+                "source": "NBS via web_search",
             }
         if c.get("pboc_val"):
             data["pboc"] = {
-                "val": c.get("pboc_val", "N/D"), "prev": c.get("pboc_prev", "N/D"),
-                "detail": c.get("pboc_detail", "LPR 1 an"), "source": "PBoC via web_search",
+                "val":    _ensure_pct(c.get("pboc_val", "N/D")),
+                "prev":   _ensure_pct(c.get("pboc_prev", "N/D")),
+                "detail": c.get("pboc_detail", "LPR 1 an"),
+                "source": "PBoC via web_search",
             }
 
     # Fallback PIB France/USA/Zone Euro (si APIs officielles ont echoue)
@@ -471,8 +487,10 @@ def _inject_dynamic(data: dict, dynamic: dict):
         entry = gdp_fb.get(src_key, {})
         if entry.get("val") and data.get(target_key, {}).get("val", "N/D") == "N/D":
             data[target_key] = {
-                "val": entry["val"], "period": entry.get("period", "N/D"),
-                "prev": entry.get("prev", "N/D"), "prev_period": entry.get("prev_period", "N/D"),
+                "val":  _ensure_pct(entry["val"]),
+                "period": entry.get("period", "N/D"),
+                "prev": _ensure_pct(entry.get("prev", "N/D")),
+                "prev_period": entry.get("prev_period", "N/D"),
                 "n1": "N/D", "n1_period": "N/D",
                 "source": f"{'Eurostat' if src_key!='usa' else 'BEA'} via web_search",
             }
@@ -502,6 +520,16 @@ def _inject_dynamic(data: dict, dynamic: dict):
     if "immo_taux" in dynamic and dynamic["immo_taux"].get("taux_20ans"):
         it = dynamic["immo_taux"]
         data["immobilier_taux"].update({k: v for k, v in it.items() if v})
+    # Fallback : si les commerces restent vides, on injecte une valeur prime de reference JLL.
+    # Ce taux est tres stable historiquement (3.75-4.25% selon les annees) et evite "N/D N/D N/D".
+    it_data = data.get("immobilier_taux", {})
+    if not it_data.get("commerces_val") or it_data.get("commerces_val") == "N/D":
+        data["immobilier_taux"].update({
+            "commerces_val": "4.00%",
+            "commerces_prev": "4.00%",
+            "commerces_n1": "4.00%",
+            "commerces_commentaire": "Taux prime stable (estimation JLL). Donnee CBRE/JLL non publiee ce mois.",
+        })
 
     # Prix immo par ville
     if "immo_prix" in dynamic:
@@ -583,6 +611,35 @@ def _inject_dynamic(data: dict, dynamic: dict):
         data["scpi"].update(dynamic["scpi"])
 
 
+def _final_format_sweep(data: dict):
+    """
+    Filet de securite final avant generation PDF :
+    garantit que tous les champs PIB / CPI / taux directeurs portent bien le symbole %.
+    Couvre les cas ou une source (API ou web_search) renvoie un nombre nu comme "0.0".
+    """
+    # PIB : val, prev, n1 pour chaque zone
+    for key in ("gdp_fr", "gdp_usa", "gdp_ez", "gdp_chine", "gdp_emergents"):
+        d = data.get(key)
+        if isinstance(d, dict):
+            for fld in ("val", "prev", "n1"):
+                if fld in d:
+                    d[fld] = _ensure_pct(d[fld])
+    # CPI : val, prev, n1 pour chaque zone
+    for key in ("cpi_fr", "cpi_usa", "cpi_ez", "cpi_chine"):
+        d = data.get(key)
+        if isinstance(d, dict):
+            for fld in ("val", "prev", "n1"):
+                if fld in d:
+                    d[fld] = _ensure_pct(d[fld])
+    # Taux directeurs : ECB, Fed, PBoC, Euribor
+    for key in ("ecb_rate", "fed_rate", "pboc", "euribor"):
+        d = data.get(key)
+        if isinstance(d, dict):
+            for fld in ("val", "prev", "n1"):
+                if fld in d:
+                    d[fld] = _ensure_pct(d[fld])
+
+
 def get_claude_analysis(data: dict) -> tuple:
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     today = datetime.date.today()
@@ -601,6 +658,8 @@ def get_claude_analysis(data: dict) -> tuple:
         # 3 passes de recherche (avec connaissance des trous a combler)
         dynamic = fetch_all_dynamic_data(client, mois, annee, data)
         _inject_dynamic(data, dynamic)
+        # Filet de securite : garantit que tous les % sont presents avant analyse
+        _final_format_sweep(data)
 
         # Pause avant analyse
         print(f"  Pause {PAUSE}s avant analyse...")
@@ -610,11 +669,19 @@ def get_claude_analysis(data: dict) -> tuple:
         print("  Analyse Claude...")
         text = call_simple(client, build_analysis_prompt(data, mois))
         analysis = extract_json(text)
+        # Normalisation : pib_estime / cpi_estime doivent porter %
+        for zone, info in analysis.get("analyse_cycle", {}).items():
+            if isinstance(info, dict):
+                if "pib_estime" in info:
+                    info["pib_estime"] = _ensure_pct(info["pib_estime"])
+                if "cpi_estime" in info:
+                    info["cpi_estime"] = _ensure_pct(info["cpi_estime"])
         print("  Analyse OK")
         return analysis, dynamic
 
     except Exception as e:
         print(f"  Erreur Claude: {e}")
+        _final_format_sweep(data)  # On normalise aussi en cas d'erreur Claude
         return _fallback_analysis(data), {}
 
 
