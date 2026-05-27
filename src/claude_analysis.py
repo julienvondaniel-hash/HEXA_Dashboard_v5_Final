@@ -259,22 +259,36 @@ def fetch_all_dynamic_data(client, mois: str, annee: int, data: dict) -> dict:
         '{"pmi":{"france":{"val":"","period":"","prev":"","source":""},'
         '"usa":{"val":"","period":"","prev":"","source":""},'
         '"ez":{"val":"","period":"","prev":"","source":""},'
-        '"chine":{"val":"","period":"","prev":"","source":""}},'
+        '"chine":{"val":"","period":"","prev":"","source":""},'
+        '"latam":{"val":"","period":"","prev":"","source":""},'
+        '"asie_ex_chine":{"val":"","period":"","prev":"","source":""}},'
         '"chine":{"pib_val":"","pib_period":"","pib_prev":"","pib_prev_period":"",'
         '"cpi_val":"","cpi_period":"","cpi_prev":"","cpi_prev_period":"",'
         '"pboc_val":"","pboc_prev":"","pboc_detail":""},'
         '"cpi_flash":{"france_val":"","france_period":"","france_prev":"","france_source":"",'
-        '"ez_val":"","ez_period":"","ez_prev":"","ez_source":""}'
+        '"ez_val":"","ez_period":"","ez_prev":"","ez_source":""},'
+        # Nouvelles zones v6.5.2 : PIB + CPI + taux directeurs Latam (Bresil) et Asie ex-Chine (Inde)
+        '"emerging_zones":{'
+        '"latam":{"gdp_val":"","gdp_period":"","gdp_prev":"","gdp_prev_period":"",'
+                  '"cpi_val":"","cpi_period":"","cpi_prev":"","cpi_prev_period":"","source":""},'
+        '"asie_ex_chine":{"gdp_val":"","gdp_period":"","gdp_prev":"","gdp_prev_period":"",'
+                         '"cpi_val":"","cpi_period":"","cpi_prev":"","cpi_prev_period":"","source":""},'
+        '"bcb_selic":{"val":"","prev":"","detail":"","source":""},'
+        '"rbi_repo":{"val":"","prev":"","detail":"","source":""}'
+        '}'
         + fallback_block + '}\n'
         'REGLES DE FORMAT (importantes pour l\'affichage correct du PDF) :\n'
         '- PIB et CPI : TOUJOURS avec le symbole "%". Exemple : "0.3%", "2.2%", "+5.0%". '
         'JAMAIS sans % (ne pas ecrire juste "0.3" ou "2.2").\n'
-        '- Taux directeurs (PBoC, Fed, etc.) : TOUJOURS avec "%". Exemple : "3.00%", "4.50%".\n'
+        '- Taux directeurs (PBoC, Fed, BCB Selic, RBI Repo) : TOUJOURS avec "%". Exemple : "3.00%", "10.75%".\n'
         '- PMI : nombre seul SANS unite ni mention. Exemple : "48.9", PAS "48.9 (contraction)".\n'
         '- NFP : nombre brut avec signe. Exemple : "+115000" ou "+115,000".\n'
-        f'Recherche : 1) PMI S&P Global/HCOB/Caixin {mois} {annee} '
+        '- Pour Amerique latine et Asie ex-Chine : prendre les agregats regionaux FMI WEO les plus recents '
+        '(PIB et CPI annuels ou trimestriels selon dispo). Periode = annee ou trimestre.\n'
+        f'Recherche : 1) PMI S&P Global/HCOB/Caixin {mois} {annee} (4 grandes zones + agregats Latam et Asie ex-Chine si dispos) '
         f'2) PIB CPI Chine {annee} '
-        f'3) CPI flash France Zone Euro {mois} {annee}'
+        f'3) CPI flash France Zone Euro {mois} {annee} '
+        f'4) PIB / CPI / taux directeurs Amerique latine (Bresil Selic) et Asie ex-Chine (Inde RBI Repo) {annee}'
         + fallback_keys
     )
 
@@ -356,17 +370,22 @@ def fetch_all_dynamic_data(client, mois: str, annee: int, data: dict) -> dict:
         '{"secteur":"Sante","poids":"","td":"","tendance":"","commentaire":""},'
         '{"secteur":"Logistique","poids":"","td":"","tendance":"","commentaire":""},'
         '{"secteur":"Diversifie","poids":"","td":"","tendance":"","commentaire":""}],'
-        '"scpi_phares":[{"nom":"","gestionnaire":"","secteur":"","td":"","tof":"","prix_part":"","var_prix":"","note":""},'
-        '{"nom":"","gestionnaire":"","secteur":"","td":"","tof":"","prix_part":"","var_prix":"","note":""},'
-        '{"nom":"","gestionnaire":"","secteur":"","td":"","tof":"","prix_part":"","var_prix":"","note":""}],'
+        # v6.5.2 : top 10 SCPI par collecte (au lieu de 3 SCPI phares)
+        '"scpi_top10":['
+        + ",".join(['{"nom":"","gestionnaire":"","secteur":"","td":"","tof":"","prix_part":"","var_prix":"","collecte":"","note":""}'] * 10)
+        + '],'
         '"analyse":"","points_vigilance":["","",""],"opportunites":["","",""]}}\n'
         f"Tendance par secteur SCPI : utilise EXACTEMENT 'haut', 'bas' ou 'stable'.\n"
         "Format : TD secteur ANNUEL (pas /trim), sans (annualise). Source prix immo : 'DVF/MeilleursAgents'.\n"
+        "Pour scpi_top10 : RANG IMPORTANT, classees par collecte nette decroissante "
+        f"(plus grosse collecte {annee} en position 1). "
+        "Inclure le champ 'collecte' (ex : '450 M€', '320 M€'). "
+        "Note doit etre courte (1 phrase max, ex : 'Sans frais d'entree, label ISR').\n"
         f"Recherche : 1) Taux credit immo 20 ans France {mois} {annee} CAFPI "
         "2) Bureaux vacants IDF CBRE JLL dernier trimestre "
         "3) Prix m2 Paris Lyon Tassin-la-Demi-Lune Saint-Foy-les-Lyon Maisons-Laffitte Le Vesinet Chatou Saint-Germain-en-Laye "
         f"4) SCPI marche France {annee} : TD moyen, collecte nette, decote secondaire, TOF, perfs par secteur "
-        "5) 3 SCPI phares (Iroko Zen, Corum Origin, Transitions Europe)"
+        f"5) Top 10 SCPI par collecte nette {annee} (ASPIM / MeilleuresSCPI / Pierrepapier classement)"
     )
 
     try:
@@ -396,13 +415,13 @@ def fetch_all_dynamic_data(client, mois: str, annee: int, data: dict) -> dict:
                 # S'assurer d'avoir le %
                 if s.get("td") and "%" not in s["td"]:
                     s["td"] = s["td"] + "%"
-            # Nettoyage TD marche / TOF / decote / SCPI phares : retirer "(annualise)"
+            # Nettoyage TD marche / TOF / decote / SCPI top 10 : retirer "(annualise)"
             mkt = parsed.get("scpi", {}).get("marche", {})
             for k in ("td_moyen", "td_moyen_prev", "td_moyen_n1", "tof_moyen", "decote_secondaire", "decote_prev"):
                 v = mkt.get(k, "")
                 if isinstance(v, str):
                     mkt[k] = v.replace("(annualise)", "").replace("(annualisé)", "").strip()
-            for sp in parsed.get("scpi", {}).get("scpi_phares", []):
+            for sp in parsed.get("scpi", {}).get("scpi_top10", []):
                 for k in ("td", "tof"):
                     v = sp.get(k, "")
                     if isinstance(v, str):
@@ -499,14 +518,80 @@ Reponds UNIQUEMENT avec ce JSON :
 
 
 def _inject_dynamic(data: dict, dynamic: dict):
-    if not dynamic:
-        return
+    # On peut etre appele avec dynamic vide (toutes Passes plantees) :
+    # dans ce cas on injecte uniquement des sources de repli explicites
+    # pour eviter d'afficher des sources trompeuses.
+    if dynamic is None:
+        dynamic = {}
 
-    # PMI
+    # PMI (4 grandes zones + 2 nouvelles emergentes v6.5.2)
     if "pmi" in dynamic:
-        for zone in ["france", "usa", "ez", "chine"]:
+        for zone in ["france", "usa", "ez", "chine", "latam", "asie_ex_chine"]:
             if zone in dynamic["pmi"] and dynamic["pmi"][zone].get("val"):
+                data["pmi"].setdefault(zone, {"val":"N/D","period":"N/D","prev":"N/D","source":"S&P Global (web_search)"})
                 data["pmi"][zone].update(dynamic["pmi"][zone])
+
+    # Zones emergentes v6.5.2 : PIB / CPI Latam et Asie ex-Chine + taux directeurs
+    # Aucun fallback chiffre : si Claude n'a pas trouve, on garde N/D explicite
+    if "emerging_zones" in dynamic:
+        ez_data = dynamic["emerging_zones"]
+        # Amerique latine
+        latam = ez_data.get("latam", {})
+        if latam.get("gdp_val"):
+            data["gdp_latam"] = {
+                "val":         _ensure_pct(latam["gdp_val"]),
+                "period":      latam.get("gdp_period", "N/D"),
+                "prev":        _ensure_pct(latam.get("gdp_prev", "N/D")),
+                "prev_period": latam.get("gdp_prev_period", "N/D"),
+                "n1":          "N/D", "n1_period": "N/D",
+                "source":      latam.get("source", "FMI WEO (web_search)"),
+            }
+        if latam.get("cpi_val"):
+            data["cpi_latam"] = {
+                "val":         _ensure_pct(latam["cpi_val"]),
+                "period":      latam.get("cpi_period", "N/D"),
+                "prev":        _ensure_pct(latam.get("cpi_prev", "N/D")),
+                "prev_period": latam.get("cpi_prev_period", "N/D"),
+                "n1":          "N/D", "n1_period": "N/D",
+                "source":      latam.get("source", "FMI WEO (web_search)"),
+            }
+        # Asie ex-Chine
+        asie = ez_data.get("asie_ex_chine", {})
+        if asie.get("gdp_val"):
+            data["gdp_asie_ex_chine"] = {
+                "val":         _ensure_pct(asie["gdp_val"]),
+                "period":      asie.get("gdp_period", "N/D"),
+                "prev":        _ensure_pct(asie.get("gdp_prev", "N/D")),
+                "prev_period": asie.get("gdp_prev_period", "N/D"),
+                "n1":          "N/D", "n1_period": "N/D",
+                "source":      asie.get("source", "FMI WEO (web_search)"),
+            }
+        if asie.get("cpi_val"):
+            data["cpi_asie_ex_chine"] = {
+                "val":         _ensure_pct(asie["cpi_val"]),
+                "period":      asie.get("cpi_period", "N/D"),
+                "prev":        _ensure_pct(asie.get("cpi_prev", "N/D")),
+                "prev_period": asie.get("cpi_prev_period", "N/D"),
+                "n1":          "N/D", "n1_period": "N/D",
+                "source":      asie.get("source", "FMI WEO (web_search)"),
+            }
+        # Taux directeurs emergents
+        bcb = ez_data.get("bcb_selic", {})
+        if bcb.get("val"):
+            data["bcb_selic"] = {
+                "val":    _ensure_pct(bcb["val"]),
+                "prev":   _ensure_pct(bcb.get("prev", "N/D")),
+                "detail": bcb.get("detail", "Taux Selic (Bresil)"),
+                "source": bcb.get("source", "Banco Central do Brasil (web_search)"),
+            }
+        rbi = ez_data.get("rbi_repo", {})
+        if rbi.get("val"):
+            data["rbi_repo"] = {
+                "val":    _ensure_pct(rbi["val"]),
+                "prev":   _ensure_pct(rbi.get("prev", "N/D")),
+                "detail": rbi.get("detail", "Repo Rate (Inde)"),
+                "source": rbi.get("source", "RBI (web_search)"),
+            }
 
     # CPI flash France / Zone Euro
     if "cpi_flash" in dynamic:
@@ -595,31 +680,15 @@ def _inject_dynamic(data: dict, dynamic: dict):
     if "immo_taux" in dynamic and dynamic["immo_taux"].get("taux_20ans"):
         it = dynamic["immo_taux"]
         data["immobilier_taux"].update({k: v for k, v in it.items() if v})
-    # Fallback taux 20 ans : si Pass 3 a echoue, on injecte une valeur stable de reference.
+    # Pas de fallback chiffre : si Claude n'a rien renvoye, on garde N/D et on clarifie
+    # juste la source pour que le lecteur comprenne pourquoi la donnee manque.
     it_data = data.get("immobilier_taux", {})
     if not it_data.get("taux_20ans") or it_data.get("taux_20ans") == "N/D":
-        data["immobilier_taux"].update({
-            "taux_20ans": "~3.30%",
-            "taux_20ans_prev": "~3.25%",
-            "taux_20ans_n1": "~3.00%",
-            "taux_20ans_commentaire": "Estimation CAFPI. Donnee mensuelle non collectee, valeur de reference stable.",
-        })
-    # Fallback bureaux IDF : taux de vacance stable ~11%
+        data["immobilier_taux"]["taux_20ans_commentaire"] = "CAFPI - donnee non collectee ce mois."
     if not it_data.get("bureaux_val") or it_data.get("bureaux_val") == "N/D":
-        data["immobilier_taux"].update({
-            "bureaux_val": "~11.0%",
-            "bureaux_prev": "~10.8%",
-            "bureaux_n1": "~10.0%",
-            "bureaux_commentaire": "Taux de vacance IDF (estimation JLL/CBRE). Donnee trimestrielle.",
-        })
-    # Fallback commerces : taux prime tres stable historiquement (3.75-4.25%).
+        data["immobilier_taux"]["bureaux_commentaire"] = "JLL/CBRE - donnee trimestrielle non collectee."
     if not it_data.get("commerces_val") or it_data.get("commerces_val") == "N/D":
-        data["immobilier_taux"].update({
-            "commerces_val": "4.00%",
-            "commerces_prev": "4.00%",
-            "commerces_n1": "4.00%",
-            "commerces_commentaire": "Taux prime stable (estimation JLL). Donnee CBRE/JLL non publiee ce mois.",
-        })
+        data["immobilier_taux"]["commerces_commentaire"] = "JLL/CBRE - taux prime non publie ce mois."
 
     # Prix immo par ville
     if "immo_prix" in dynamic:
@@ -629,17 +698,9 @@ def _inject_dynamic(data: dict, dynamic: dict):
 
     # Fallback : si aucun prix immo n'a ete recolte, on injecte les dernieres valeurs
     # de reference (estimation MeilleursAgents) pour eviter une Section 10 vide.
-    if not data.get("immo_prix"):
-        data["immo_prix"] = {
-            "Paris":                {"val": 9800, "var_1an": 0.0, "var_5ans": 0.0, "periode": "estimation", "source": "DVF/MeilleursAgents (estim.)"},
-            "Lyon":                 {"val": 4500, "var_1an": 0.0, "var_5ans": 0.0, "periode": "estimation", "source": "DVF/MeilleursAgents (estim.)"},
-            "Tassin-la-Demi-Lune":  {"val": 4650, "var_1an": 0.0, "var_5ans": 0.0, "periode": "estimation", "source": "DVF/MeilleursAgents (estim.)"},
-            "Saint-Foy-les-Lyon":   {"val": 4160, "var_1an": 0.0, "var_5ans": 0.0, "periode": "estimation", "source": "DVF/MeilleursAgents (estim.)"},
-            "Maisons-Laffitte":     {"val": 6400, "var_1an": 0.0, "var_5ans": 0.0, "periode": "estimation", "source": "DVF/MeilleursAgents (estim.)"},
-            "Le Vesinet":           {"val": 6900, "var_1an": 0.0, "var_5ans": 0.0, "periode": "estimation", "source": "DVF/MeilleursAgents (estim.)"},
-            "Chatou":               {"val": 5800, "var_1an": 0.0, "var_5ans": 0.0, "periode": "estimation", "source": "DVF/MeilleursAgents (estim.)"},
-            "Saint-Germain-en-Laye":{"val": 5500, "var_1an": 0.0, "var_5ans": 0.0, "periode": "estimation", "source": "DVF/MeilleursAgents (estim.)"},
-        }
+    # Prix immo par ville : pas de fallback chiffre (eviter biais d'analyse).
+    # Si Claude n'a rien collecte, immo_prix reste vide et le PDF affichera
+    # uniquement l'entete de la Section 10.
 
     # Private Equity
     pe = data.get("private_equity", {})
@@ -672,22 +733,9 @@ def _inject_dynamic(data: dict, dynamic: dict):
             val = val + " T$"
         pe["dp"] = (val, dp.get("var", ""), dp.get("periode", ""))
 
-    # Fallback PE : si Passe 2 a totalement echoue, on injecte des valeurs de reference
-    # connues (slow-moving) pour eviter un PDF rempli de N/D.
-    if pe.get("argos", ("N/D",))[0] == "N/D":
-        pe["argos"] = ("~8.5x", "8.6x", "Q4 2025", "9.5x", "Q1 2025")
-    if pe.get("dp", ("N/D",))[0] == "N/D":
-        pe["dp"] = ("~3.7 T$", "estimation Bain", "donnee non publiee")
-    if pe.get("rdt", ("N/D",))[0] == "N/D":
-        pe["rdt"] = ("~14%", "moyenne 10 ans (estimation France Invest)", "")
-    if pe.get("levees", ("N/D",))[0] == "N/D":
-        pe["levees"] = ("N/D", "Donnee publiee annuellement", "")
-    if pe.get("invest", ("N/D",))[0] == "N/D":
-        pe["invest"] = ("N/D", "Donnee publiee annuellement", "")
-    if pe.get("cessions", ("N/D",))[0] == "N/D":
-        pe["cessions"] = ("N/D", "Donnee publiee annuellement", "")
-    if pe.get("nb_ent", ("N/D",))[0] == "N/D":
-        pe["nb_ent"] = ("N/D", "", "")
+    # Pas de fallback chiffre pour les indicateurs PE : si Claude n'a rien collecte,
+    # les valeurs restent N/D (initialisees par dashboard.py). Cela evite tout biais
+    # d'analyse base sur des estimations approximatives.
 
     # Spread OAT/Bund - on enleve toute unite parasite (Claude tend a renvoyer "69 bps")
     if "spread_oat_bund" in dynamic and dynamic["spread_oat_bund"].get("oat"):
@@ -727,58 +775,22 @@ def _inject_dynamic(data: dict, dynamic: dict):
                 "source":      uc.get("source", "web_search"),
             })
 
-    # Fallback spreads : si vraiment rien n'a ete collecte ni en API ni en web_search.
+    # Pas de fallback chiffre sur les spreads OAT/Bund, IG, HY : si ni l'API FRED ni
+    # web_search n'ont rien collecte, on garde N/D explicite plutot que d'introduire
+    # un biais avec des estimations approximatives.
     if data.get("spread", {}).get("spread", "N/D") == "N/D":
-        data["spread"] = {
-            "spread": "~70", "spread_prev": "~70",
-            "oat": "N/D", "bund": "N/D",
-            "source": "Banque de France / Bundesbank (donnee temporairement non collectee)",
-        }
+        data["spread"]["source"] = "Banque de France / Bundesbank - donnee non collectee."
     if data.get("credit_spreads", {}).get("ig_spread", "N/D") == "N/D":
-        data["credit_spreads"] = {
-            "ig_spread": "~80", "ig_spread_prev": "~80", "ig_spread_n1": "N/D",
-            "hy_spread": "~290", "hy_spread_prev": "~290", "hy_spread_n1": "N/D",
-            "source": "FRED BAMLC0A0CM / BAMLH0A0HYM2 (estimation)",
-        }
+        data["credit_spreads"]["source"] = "FRED BAMLC0A0CM / BAMLH0A0HYM2 - donnee non collectee."
 
     # SCPI
     if "scpi" in dynamic and dynamic["scpi"].get("marche", {}).get("td_moyen"):
         data["scpi"].update(dynamic["scpi"])
-
-    # Fallback SCPI : si Passe 3 SCPI a echoue, on injecte des valeurs de reference
-    # (slow-moving) pour eviter Section 13 entierement vide.
+    # Pas de fallback chiffre SCPI. Si la Passe 3 a echoue, Section 13 reste avec
+    # uniquement les en-tetes et un message clair dans la source.
     scpi = data.get("scpi", {})
     if scpi.get("marche", {}).get("td_moyen", "N/D") == "N/D":
-        scpi["marche"] = {
-            "td_moyen": "~4.9%", "td_moyen_prev": "4.72%", "td_moyen_n1": "4.52%",
-            "collecte_nette": "~1.1 Md€", "collecte_prev": "N/D", "collecte_periode": "trimestre courant",
-            "decote_secondaire": "10-25%", "decote_prev": "10-20%", "tof_moyen": "~93%",
-            "source": "ASPIM / MeilleuresSCPI (estimation)",
-        }
-    if not scpi.get("par_secteur"):
-        scpi["par_secteur"] = [
-            {"secteur": "Bureaux",    "poids": "~35%", "td": "~4.5%", "tendance": "▼", "commentaire": "Segment sous pression historique."},
-            {"secteur": "Commerce",   "poids": "~20%", "td": "~4.8%", "tendance": "▶", "commentaire": "Stable, taux prime ~4%."},
-            {"secteur": "Sante",      "poids": "~8%",  "td": "~4.5%", "tendance": "▶", "commentaire": "Demographie porteuse."},
-            {"secteur": "Logistique", "poids": "~12%", "td": "~5.5%", "tendance": "▲", "commentaire": "Demande e-commerce."},
-            {"secteur": "Diversifie", "poids": "~25%", "td": "~6.0%", "tendance": "▲", "commentaire": "Strategies europeennes."},
-        ]
-    if not scpi.get("scpi_phares"):
-        scpi["scpi_phares"] = [
-            {"nom": "Iroko Zen",          "gestionnaire": "Iroko",      "secteur": "Diversifiee", "td": "~7.1%", "tof": "~97%", "prix_part": "204€",  "var_prix": "0%", "note": "Sans frais d'entree, diversifiee Europe."},
-            {"nom": "Corum Origin",       "gestionnaire": "Corum AM",   "secteur": "Diversifiee", "td": "~6.5%", "tof": "~96%", "prix_part": "1135€", "var_prix": "0%", "note": "Reference historique, 13 pays zone euro."},
-            {"nom": "Transitions Europe", "gestionnaire": "Arkea REIM", "secteur": "Diversifiee", "td": "~7.6%", "tof": "~98%", "prix_part": "202€",  "var_prix": "0%", "note": "100% europeenne, label ISR."},
-        ]
-    if scpi.get("analyse", "N/D") == "N/D":
-        scpi["analyse"] = "Marche SCPI a deux vitesses : diversifiees europeennes captent les flux, bureaux franciliens sous pression. Donnees temporairement non collectees."
-    if not scpi.get("points_vigilance"):
-        scpi["points_vigilance"] = ["Parts en attente sur SCPI bureaux historiques",
-                                     "Concentration de la collecte sur quelques vehicules",
-                                     "Baisse de dividende observee sur une part des SCPI"]
-    if not scpi.get("opportunites"):
-        scpi["opportunites"] = ["SCPI diversifiees europeennes a TD > 6%",
-                                "Decotes sur marche secondaire",
-                                "Nouvelles SCPI sans frais d'entree"]
+        scpi.setdefault("marche", {})["source"] = "ASPIM / MeilleuresSCPI - donnee non collectee."
 
 
 def _diagnostic_log(data: dict):
@@ -788,6 +800,10 @@ def _diagnostic_log(data: dict):
     """
     print("  --- Diagnostic post-injection ---")
     critical = {
+        "PIB Latam (P1)":         data.get("gdp_latam", {}).get("val", "N/D"),
+        "PIB Asie ex-Chine (P1)": data.get("gdp_asie_ex_chine", {}).get("val", "N/D"),
+        "BCB Selic Bresil (P1)":  data.get("bcb_selic", {}).get("val", "N/D"),
+        "RBI Repo Inde (P1)":     data.get("rbi_repo", {}).get("val", "N/D"),
         "Spread OAT/Bund (P2)":   data.get("spread", {}).get("spread", "N/D"),
         "Spread IG (P2)":         data.get("credit_spreads", {}).get("ig_spread", "N/D"),
         "Spread HY (P2)":         data.get("credit_spreads", {}).get("hy_spread", "N/D"),
@@ -798,7 +814,7 @@ def _diagnostic_log(data: dict):
         "Bureaux IDF (P3)":       data.get("immobilier_taux", {}).get("bureaux_val", "N/D"),
         "Prix immo (P3)":         f"{len(data.get('immo_prix', {}))} villes",
         "SCPI TD moyen (P3)":     data.get("scpi", {}).get("marche", {}).get("td_moyen", "N/D"),
-        "SCPI phares (P3)":       f"{len(data.get('scpi', {}).get('scpi_phares', []))} SCPI",
+        "SCPI top 10 (P3)":       f"{len(data.get('scpi', {}).get('scpi_top10', []))} SCPI",
     }
     nd_count = 0
     for k, v in critical.items():
@@ -817,22 +833,24 @@ def _final_format_sweep(data: dict):
     garantit que tous les champs PIB / CPI / taux directeurs portent bien le symbole %.
     Couvre les cas ou une source (API ou web_search) renvoie un nombre nu comme "0.0".
     """
-    # PIB : val, prev, n1 pour chaque zone
-    for key in ("gdp_fr", "gdp_usa", "gdp_ez", "gdp_chine", "gdp_emergents"):
+    # PIB : val, prev, n1 pour chaque zone (incluant zones emergentes v6.5.2)
+    for key in ("gdp_fr", "gdp_usa", "gdp_ez", "gdp_chine", "gdp_emergents",
+                "gdp_latam", "gdp_asie_ex_chine"):
         d = data.get(key)
         if isinstance(d, dict):
             for fld in ("val", "prev", "n1"):
                 if fld in d:
                     d[fld] = _ensure_pct(d[fld])
-    # CPI : val, prev, n1 pour chaque zone
-    for key in ("cpi_fr", "cpi_usa", "cpi_ez", "cpi_chine"):
+    # CPI : val, prev, n1 pour chaque zone (incluant zones emergentes v6.5.2)
+    for key in ("cpi_fr", "cpi_usa", "cpi_ez", "cpi_chine",
+                "cpi_latam", "cpi_asie_ex_chine"):
         d = data.get(key)
         if isinstance(d, dict):
             for fld in ("val", "prev", "n1"):
                 if fld in d:
                     d[fld] = _ensure_pct(d[fld])
-    # Taux directeurs : ECB, Fed, PBoC, Euribor
-    for key in ("ecb_rate", "fed_rate", "pboc", "euribor"):
+    # Taux directeurs : ECB, Fed, PBoC, Euribor + BCB Selic, RBI Repo v6.5.2
+    for key in ("ecb_rate", "fed_rate", "pboc", "euribor", "bcb_selic", "rbi_repo"):
         d = data.get(key)
         if isinstance(d, dict):
             for fld in ("val", "prev", "n1"):
