@@ -148,6 +148,37 @@ def fmt_bps(v):
     return f"{vf:.0f} bps"
 
 
+def nd_if_empty(v):
+    """Renvoie 'N/D' pour les valeurs vides ou None. Sinon renvoie la valeur tel quel.
+    Evite l'affichage de '()' parasites quand prev_period ou n1_period sont vides."""
+    if v is None:
+        return "N/D"
+    s = str(v).strip()
+    if not s or s.lower() in ("none", "null", "nan"):
+        return "N/D"
+    return s
+
+
+def normalize_pmi_period(period: str, default_month_year: str = "") -> str:
+    """Normalise une periode PMI : transforme 'Q2 2026' ou 'T2 2026' en mois explicite.
+    Le PMI Composite est mensuel, donc une valeur trimestrielle est une erreur d'interpretation.
+    Si on ne peut pas deviner, on garde la valeur d'origine."""
+    if not period:
+        return "N/D"
+    p = period.strip()
+    # Si deja un mois (par ex "Mai 2026"), on garde
+    mois_fr = ["Janvier", "Fevrier", "Mars", "Avril", "Mai", "Juin",
+               "Juillet", "Aout", "Septembre", "Octobre", "Novembre", "Decembre"]
+    for m in mois_fr:
+        if m.lower() in p.lower():
+            return p
+    # Si format trimestriel (Q1/Q2/Q3/Q4 ou T1/T2/T3/T4), on remplace par le mois courant connu
+    import re
+    if re.match(r"^[QT]\d\s*\d{4}", p, re.IGNORECASE) and default_month_year:
+        return default_month_year
+    return p
+
+
 # ── ENTETE / PIED DE PAGE ────────────────────────────────────────────────────
 def page_bg(canvas_obj, doc):
     canvas_obj.saveState()
@@ -254,9 +285,9 @@ def generate_pdf(data, output_path):
         rows.append([
             Paragraph(zone, label_style),
             Paragraph(f'<font color="#{h(gc)}"><b>{d["val"]}</b></font> <font color="#{h(ac)}">{arw}</font>', value_style),
-            Paragraph(d["period"], small_style),
-            Paragraph(d["prev"], small_style),
-            Paragraph(f'{d["n1"]} ({d["n1_period"]})', small_style),
+            Paragraph(nd_if_empty(d["period"]), small_style),
+            Paragraph(nd_if_empty(d["prev"]), small_style),
+            Paragraph(f'{nd_if_empty(d["n1"])} ({nd_if_empty(d["n1_period"])})', small_style),
             Paragraph(d["source"], note_style)])
     story.append(std_table(pib_hdr, rows, pib_cw))
     story.append(Spacer(1, 3 * mm))
@@ -265,6 +296,8 @@ def generate_pdf(data, output_path):
     pmi_hdr = ["Zone", "PMI Composite", "Mois", "Mois prec.", "Seuil", "Signal / Source"]
     pmi_cw = [30 * mm, 22 * mm, 18 * mm, 18 * mm, 14 * mm, 56 * mm]
     rows = []
+    # Mois courant pour normaliser les periodes PMI mal interpretees (Q2 2026 -> Mai 2026)
+    current_month_year = data.get("date", "")
     # Ordre v6.5.2 : France, Zone Euro, Etats-Unis, Chine, + Latam et Asie si dispos
     pmi_zones = [("France", "france"), ("Zone Euro", "ez"), ("Etats-Unis", "usa"), ("Chine", "chine")]
     if data["pmi"].get("latam", {}).get("val", "N/D") != "N/D":
@@ -286,8 +319,8 @@ def generate_pdf(data, output_path):
         rows.append([
             Paragraph(zone, label_style),
             Paragraph(f'<font color="#{h(pc)}"><b>{val}</b></font> <font color="#{h(ac)}">{arw}</font>', value_style),
-            Paragraph(pm["period"], small_style),
-            Paragraph(prev, small_style),
+            Paragraph(normalize_pmi_period(pm["period"], current_month_year), small_style),
+            Paragraph(nd_if_empty(prev), small_style),
             Paragraph("50,0", small_style),
             Paragraph(f'<font color="#{h(sig_c)}">{sig}</font> - {pm["source"]}', note_style)])
     story.append(std_table(pmi_hdr, rows, pmi_cw))
@@ -301,9 +334,9 @@ def generate_pdf(data, output_path):
     t_nfp = Table([
         [Paragraph("NFP Etats-Unis (BLS)", label_style),
          Paragraph(f'<b>{nfp["val"]}</b> emplois <font color="#{h(col_n)}">{arw_n}</font>', value_style),
-         Paragraph(nfp["period"], small_style),
-         Paragraph(f'Prec. : {nfp["prev"]} ({nfp["prev_period"]})', small_style),
-         Paragraph(f'A-1 : {nfp["n1"]}', small_style),
+         Paragraph(nd_if_empty(nfp["period"]), small_style),
+         Paragraph(f'Prec. : {nd_if_empty(nfp["prev"])} ({nd_if_empty(nfp["prev_period"])})', small_style),
+         Paragraph(f'A-1 : {nd_if_empty(nfp["n1"])}', small_style),
          Paragraph(f'Chomage : {unem["val"]}', small_style)],
         [Paragraph(f'Source : {nfp["source"]}', note_style), '', '', '', '', '']],
         colWidths=[28 * mm, 26 * mm, 20 * mm, 36 * mm, 26 * mm, 22 * mm])
@@ -337,9 +370,9 @@ def generate_pdf(data, output_path):
         rows.append([
             Paragraph(zone, label_style),
             Paragraph(f'<font color="#{h(cc)}"><b>{cd["val"]}</b></font> <font color="#{h(ac)}">{arw}</font>', value_style),
-            Paragraph(cd["period"], small_style),
-            Paragraph(f'{cd["prev"]} ({cd["prev_period"]})', small_style),
-            Paragraph(f'{cd["n1"]} ({cd["n1_period"]})', small_style),
+            Paragraph(nd_if_empty(cd["period"]), small_style),
+            Paragraph(f'{nd_if_empty(cd["prev"])} ({nd_if_empty(cd["prev_period"])})', small_style),
+            Paragraph(f'{nd_if_empty(cd["n1"])} ({nd_if_empty(cd["n1_period"])})', small_style),
             Paragraph(cd["source"], note_style)])
     story += [std_table(cpi_hdr, rows, cpi_cw), Spacer(1, 4 * mm)]
 
@@ -363,13 +396,13 @@ def generate_pdf(data, output_path):
     rows = [
         [Paragraph("BCE (Zone Euro)", label_style),
          Paragraph(f'<b>{ecb["val"]}</b> <font color="#{h(col_e)}">{arw_e}</font>', value_style),
-         Paragraph(f'Prec. {ecb["prev"]} ({ecb["prev_period"]})', small_style),
-         Paragraph(ecb["prev"], small_style),
+         Paragraph(f'Prec. {nd_if_empty(ecb["prev"])} ({nd_if_empty(ecb["prev_period"])})', small_style),
+         Paragraph(nd_if_empty(ecb["prev"]), small_style),
          Paragraph(ecb["source"], note_style)],
         [Paragraph("Fed (Etats-Unis)", label_style),
          Paragraph(f'<b>{fed["val"]}</b> <font color="#{h(col_f)}">{arw_f}</font>', value_style),
-         Paragraph(f'Prec. {fed["prev"]} ({fed["prev_period"]})', small_style),
-         Paragraph(fed["prev"], small_style),
+         Paragraph(f'Prec. {nd_if_empty(fed["prev"])} ({nd_if_empty(fed["prev_period"])})', small_style),
+         Paragraph(nd_if_empty(fed["prev"]), small_style),
          Paragraph(fed["source"], note_style)],
         [Paragraph("PBoC (Chine)", label_style),
          Paragraph(f'<b>{pboc["val"]}</b> <font color="#{h(col_p)}">{arw_p}</font>', value_style),
