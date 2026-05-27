@@ -207,6 +207,29 @@ def _need_gdp_fallback(data: dict) -> dict:
     return need
 
 
+def _need_a1_fallback(data: dict) -> dict:
+    """Identifie les zones PIB/CPI dont la valeur A-1 (il y a 12 mois) manque.
+    Retourne un dict {(zone_label, indicateur): cle_data} pour chaque champ a remplir.
+    Permet de cibler precisement la demande Claude Pass 1 sans solliciter de fallback chiffre."""
+    need = {}
+    pairs = [
+        # (label_zone, type_indicateur, cle_dans_data)
+        ("France",    "PIB", "gdp_fr"),
+        ("USA",       "PIB", "gdp_usa"),
+        ("Zone Euro", "PIB", "gdp_ez"),
+        ("Chine",     "PIB", "gdp_chine"),
+        ("France",    "CPI", "cpi_fr"),
+        ("USA",       "CPI", "cpi_usa"),
+        ("Zone Euro", "CPI", "cpi_ez"),
+        ("Chine",     "CPI", "cpi_chine"),
+    ]
+    for zone, kind, key in pairs:
+        n1 = data.get(key, {}).get("n1", "N/D")
+        if not n1 or n1 == "N/D":
+            need[f"{zone}_{kind}"] = key
+    return need
+
+
 def _need_fed_fallback(data: dict) -> bool:
     v = data.get("fed_rate", {}).get("val", "N/D")
     return not v or v == "N/D"
@@ -234,9 +257,10 @@ def fetch_all_dynamic_data(client, mois: str, annee: int, data: dict) -> dict:
     gdp_need = _need_gdp_fallback(data)
     fed_need = _need_fed_fallback(data)
     eur_need = _need_euribor_fallback(data)
+    a1_need  = _need_a1_fallback(data)  # v6.5.4 : valeurs A-1 (il y a 12 mois)
     fallback_block = ""
     fallback_keys = ""
-    if gdp_need or fed_need or eur_need:
+    if gdp_need or fed_need or eur_need or a1_need:
         gdp_zones = ", ".join(gdp_need.keys()) if gdp_need else "aucune"
         extra = []
         if gdp_need:
@@ -247,11 +271,19 @@ def fetch_all_dynamic_data(client, mois: str, annee: int, data: dict) -> dict:
             extra.append('"fed_fallback":{"val":"","prev":"","prev_period":"","source":""}')
         if eur_need:
             extra.append('"euribor_fallback":{"val":"","date":"","prev":"","prev_date":"","n1":"","n1_date":""}')
+        if a1_need:
+            # v6.5.4 : pour chaque (zone, indicateur) manquant, on demande val + period A-1
+            extra.append('"a1_fallback":{' +
+                         ",".join([f'"{label}":{{"val":"","period":""}}'
+                                   for label in a1_need.keys()]) + '}')
         fallback_block = "," + ",".join(extra)
         parts = []
         if gdp_need: parts.append(f"PIB trimestriel le plus recent pour {gdp_zones}")
         if fed_need: parts.append("Fed funds rate (upper bound) actuel")
         if eur_need: parts.append("Euribor 3 mois actuel et historique")
+        if a1_need:
+            zones_a1 = ", ".join(sorted(set(a1_need.keys())))
+            parts.append(f"Valeur PIB/CPI il y a 12 mois (A-1) pour {zones_a1}")
         fallback_keys = " + Fallback : " + " + ".join(parts)
 
     prompt1 = (
@@ -290,18 +322,33 @@ def fetch_all_dynamic_data(client, mois: str, annee: int, data: dict) -> dict:
         'Exemple Latam : gdp_val="2.5%", gdp_period="2025", cpi_val="5.0%", cpi_period="2025". '
         'Exemple Asie ex-Chine : gdp_val="4.5%", gdp_period="2025", cpi_val="2.3%", cpi_period="2025". '
         'Ces valeurs sont obligatoires pour le rendu PDF.\n'
+        '- VALEURS A-1 (CRITIQUE v6.5.4) : si "a1_fallback" est demande, pour chaque champ '
+        '(ex. "France_PIB", "USA_CPI"), remplir avec la valeur du MEME indicateur il y a 12 mois '
+        '(meme trimestre/mois mais annee precedente). '
+        'Exemple France_PIB : val="0.2%", period="T1 2025". '
+        'Exemple USA_CPI : val="2.3%", period="Avril 2025". '
+        'Source : INSEE, Eurostat, BLS, BEA, NBS (revisions historiques). '
+        'Si Claude ne trouve pas, laisser val="" et period="" (le PDF affichera N/D).\n'
         f'Recherche : 1) PMI S&P Global/HCOB/Caixin {mois} {annee} (4 grandes zones, periode en MOIS) '
         f'2) PIB CPI Chine {annee} '
         f'3) CPI flash France Zone Euro {mois} {annee} '
         f'4) FMI WEO {annee} agregat Amerique latine et Caraibes : projection PIB et inflation annuelle '
         f'5) FMI WEO {annee} agregat emerging Asia excluding China : projection PIB et inflation annuelle '
-        f'6) BCB Brasil Selic decision la plus recente + RBI India Repo Rate decision la plus recente'
+        f'6) BCB Brasil Selic decision la plus recente + RBI India Repo Rate decision la plus recente '
+        f'7) Valeurs PIB et CPI historiques {annee - 1} (il y a 12 mois) pour France, USA, Zone Euro, Chine'
         + fallback_keys
     )
 
     try:
-        print("  Passe 1 (PMI/Chine/CPI" + (" + fallback PIB/Fed/Euribor" if (gdp_need or fed_need or eur_need) else "") + ")...")
-        text1 = call_with_search(client, prompt1, max_tokens=4000)
+        extras = []
+        if gdp_need: extras.append("PIB")
+        if fed_need: extras.append("Fed")
+        if eur_need: extras.append("Euribor")
+        if a1_need:  extras.append(f"A-1 ({len(a1_need)} champs)")
+        suffix = " + fallback " + "/".join(extras) if extras else ""
+        print("  Passe 1 (PMI/Chine/CPI" + suffix + ")...")
+        # v6.5.4 : max_tokens majores a 5000 pour absorber le bloc A-1 (jusqu'a 8 champs supplementaires)
+        text1 = call_with_search(client, prompt1, max_tokens=5000)
         if text1:
             result.update(extract_json(text1))
             print("  Passe 1 OK")
@@ -599,6 +646,24 @@ def _inject_dynamic(data: dict, dynamic: dict):
                 "detail": rbi.get("detail", "Repo Rate (Inde)"),
                 "source": rbi.get("source", "RBI (web_search)"),
             }
+
+    # v6.5.4 : valeurs A-1 (il y a 12 mois) pour PIB et CPI
+    # Mappe les cles "<Zone>_<Indicateur>" (ex. "France_PIB") vers data["gdp_fr"]["n1"]
+    if "a1_fallback" in dynamic:
+        a1_map = {
+            "France_PIB":    "gdp_fr",     "USA_PIB":       "gdp_usa",
+            "Zone Euro_PIB": "gdp_ez",     "Chine_PIB":     "gdp_chine",
+            "France_CPI":    "cpi_fr",     "USA_CPI":       "cpi_usa",
+            "Zone Euro_CPI": "cpi_ez",     "Chine_CPI":     "cpi_chine",
+        }
+        for label, fields in dynamic["a1_fallback"].items():
+            data_key = a1_map.get(label)
+            if data_key and data_key in data and isinstance(fields, dict):
+                val = fields.get("val", "")
+                period = fields.get("period", "")
+                if val:  # Si Claude a trouve une valeur, on l'injecte
+                    data[data_key]["n1"] = _ensure_pct(val)
+                    data[data_key]["n1_period"] = period if period else "N/D"
 
     # CPI flash France / Zone Euro
     if "cpi_flash" in dynamic:
