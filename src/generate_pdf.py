@@ -822,12 +822,17 @@ def generate_pdf(data, output_path):
         [Paragraph("Multiple EV/EBITDA Mid-Market", label_style),
          Paragraph("Dry Powder mondial", label_style),
          Paragraph("Rendement net PE France (10 ans)", label_style)],
+        # Style local avec leading proportionnel a la taille pour eviter le chevauchement
+        # entre le gros chiffre et sa caption (corrige le bug visuel v6.2).
         [Paragraph(f'<font size="{argos_size}" color="#{h(NAVY_LIGHT)}"><b>{argos[0]}</b></font><br/>'
-                   f'<font size="7" color="#5D6D7E">Indice Argos Mid-Market</font>', value_style),
+                   f'<font size="7" color="#5D6D7E">Indice Argos Mid-Market</font>',
+                   S("kpi_a", fontName="Helvetica", fontSize=argos_size, leading=argos_size + 6, alignment=TA_CENTER)),
          Paragraph(f'<font size="{dp_size}" color="#{h(TURQUOISE)}"><b>{pe["dp"][0]}</b></font><br/>'
-                   f'<font size="7" color="#5D6D7E">{pe["dp"][1]} {pe["dp"][2]}</font>', value_style),
+                   f'<font size="7" color="#5D6D7E">{pe["dp"][1]} {pe["dp"][2]}</font>',
+                   S("kpi_d", fontName="Helvetica", fontSize=dp_size, leading=dp_size + 6, alignment=TA_CENTER)),
          Paragraph(f'<font size="{rdt_size}" color="#{h(GREEN)}"><b>{pe["rdt"][0]}</b></font><br/>'
-                   f'<font size="7" color="#5D6D7E">{pe["rdt"][1]}</font>', value_style)],
+                   f'<font size="7" color="#5D6D7E">{pe["rdt"][1]}</font>',
+                   S("kpi_r", fontName="Helvetica", fontSize=rdt_size, leading=rdt_size + 6, alignment=TA_CENTER))],
         [Paragraph(f'Prec. : {argos[1]} ({argos[2]})<br/>A-1 : {argos[3]} ({argos[4]})<br/>'
                    f'<font color="#{h(RED)}">Compression des multiples</font>', small_style),
          Paragraph("Capitaux non investis mondiaux.<br/>Pression sur valorisations.", small_style),
@@ -846,6 +851,12 @@ def generate_pdf(data, output_path):
         ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#B0C4C4")),
         ('TOPPADDING', (0, 0), (-1, -1), 5),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+        # Bloc KPI : padding important pour reserver l'espace au gros chiffre + caption
+        ('TOPPADDING', (0, 1), (-1, 1), 10),
+        ('BOTTOMPADDING', (0, 1), (-1, 1), 12),
+        # Bloc commentaire : padding genereux pour respirer
+        ('TOPPADDING', (0, 2), (-1, 2), 8),
+        ('BOTTOMPADDING', (0, 2), (-1, 2), 8),
         ('LINEBELOW', (0, 0), (-1, 0), 1, TURQUOISE)]))
     story += [t_kpi, Spacer(1, 3 * mm)]
 
