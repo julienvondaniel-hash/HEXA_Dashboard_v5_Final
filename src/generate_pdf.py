@@ -204,7 +204,7 @@ def page_bg(canvas_obj, doc):
     canvas_obj.setFont("Helvetica-Oblique", 6.5)
     canvas_obj.setFillColor(colors.HexColor("#AABCCC"))
     canvas_obj.drawCentredString(w / 2 + 12 * mm, h2 - 27 * mm,
-        "Sources : INSEE - Eurostat - BEA - BLS - ECB - Fed - CBOE - CNN - S&P PMI - Yahoo Finance - FRED - DVF - France Invest - Banque Mondiale")
+        "Sources : INSEE - Eurostat - BEA - BLS - ECB - Fed - CBOE - CNN - S&P PMI - Yahoo Finance - FRED - OCDE - DVF - France Invest - Banque Mondiale - FMI WEO - ASPIM")
     canvas_obj.setFillColor(NAVY)
     canvas_obj.rect(0, 0, w, 9 * mm, fill=1, stroke=0)
     canvas_obj.setFillColor(TURQUOISE)
@@ -273,13 +273,13 @@ def generate_pdf(data, output_path):
     pib_hdr = ["Zone", "PIB", "Periode", "Prec.", "A-1", "Source"]
     pib_cw = [30 * mm, 20 * mm, 24 * mm, 18 * mm, 22 * mm, 44 * mm]
     rows = []
-    # Ordre v6.5.2 : France, Zone Euro, Etats-Unis, Chine, Amerique latine, Asie ex-Chine
+    # Ordre v6.5.6 : France, Zone Euro, Etats-Unis, Chine, Bresil, Inde
     for zone, d in [("France", data["gdp_fr"]),
                     ("Zone Euro", data["gdp_ez"]),
                     ("Etats-Unis", data["gdp_usa"]),
                     ("Chine", data["gdp_chine"]),
-                    ("Amerique latine", data.get("gdp_latam", {"val":"N/D","period":"N/D","prev":"N/D","n1":"N/D","n1_period":"N/D","source":"FMI WEO (web_search)"})),
-                    ("Asie ex-Chine",  data.get("gdp_asie_ex_chine", {"val":"N/D","period":"N/D","prev":"N/D","n1":"N/D","n1_period":"N/D","source":"FMI WEO (web_search)"}))]:
+                    ("Bresil", data.get("gdp_bresil", {"val":"N/D","period":"N/D","prev":"N/D","n1":"N/D","n1_period":"N/D","source":"IBGE (web_search)"})),
+                    ("Inde",   data.get("gdp_inde", {"val":"N/D","period":"N/D","prev":"N/D","n1":"N/D","n1_period":"N/D","source":"MOSPI (web_search)"}))]:
         arw, ac = arrow(d["val"], d["prev"])
         gc = gdp_color(d["val"])
         rows.append([
@@ -300,10 +300,10 @@ def generate_pdf(data, output_path):
     current_month_year = data.get("date", "")
     # Ordre v6.5.2 : France, Zone Euro, Etats-Unis, Chine, + Latam et Asie si dispos
     pmi_zones = [("France", "france"), ("Zone Euro", "ez"), ("Etats-Unis", "usa"), ("Chine", "chine")]
-    if data["pmi"].get("latam", {}).get("val", "N/D") != "N/D":
-        pmi_zones.append(("Amerique latine", "latam"))
-    if data["pmi"].get("asie_ex_chine", {}).get("val", "N/D") != "N/D":
-        pmi_zones.append(("Asie ex-Chine", "asie_ex_chine"))
+    if data["pmi"].get("bresil", {}).get("val", "N/D") != "N/D":
+        pmi_zones.append(("Bresil", "bresil"))
+    if data["pmi"].get("inde", {}).get("val", "N/D") != "N/D":
+        pmi_zones.append(("Inde", "inde"))
     for zone, key in pmi_zones:
         pm = data["pmi"][key]
         val, prev = pm["val"], pm["prev"]
@@ -356,15 +356,15 @@ def generate_pdf(data, output_path):
     cpi_hdr = ["Zone", "IPC a/a", "Mois", "Mois prec.", "A-1", "Source"]
     cpi_cw = [30 * mm, 20 * mm, 22 * mm, 22 * mm, 22 * mm, 42 * mm]
     rows = []
-    # Ordre v6.5.2 : France, Zone Euro, Etats-Unis, Chine, Amerique latine, Asie ex-Chine
+    # Ordre v6.5.6 : France, Zone Euro, Etats-Unis, Chine, Bresil, Inde
     cpi_default = {"val":"N/D","period":"N/D","prev":"N/D","prev_period":"N/D",
-                   "n1":"N/D","n1_period":"N/D","source":"FMI WEO (web_search)"}
+                   "n1":"N/D","n1_period":"N/D","source":"web_search"}
     for zone, cd in [("France", data["cpi_fr"]),
                      ("Zone Euro", data["cpi_ez"]),
                      ("Etats-Unis", data["cpi_usa"]),
                      ("Chine", data["cpi_chine"]),
-                     ("Amerique latine", data.get("cpi_latam", cpi_default)),
-                     ("Asie ex-Chine",  data.get("cpi_asie_ex_chine", cpi_default))]:
+                     ("Bresil", data.get("cpi_bresil", {**cpi_default, "source":"IBGE (web_search)"})),
+                     ("Inde",   data.get("cpi_inde", {**cpi_default, "source":"MOSPI (web_search)"}))]:
         arw, ac = arrow(cd["val"], cd["prev"])
         cc = cpi_color(cd["val"])
         rows.append([
@@ -411,12 +411,12 @@ def generate_pdf(data, output_path):
          Paragraph(pboc["source"], note_style)],
         [Paragraph("BCB Selic (Bresil)", label_style),
          Paragraph(f'<b>{bcb["val"]}</b> <font color="#{h(col_b)}">{arw_b}</font>', value_style),
-         Paragraph(bcb.get("detail", "Taux Selic (Amerique latine)"), small_style),
+         Paragraph(bcb.get("detail", "Taux Selic"), small_style),
          Paragraph(bcb["prev"], small_style),
          Paragraph(bcb["source"], note_style)],
         [Paragraph("RBI Repo (Inde)", label_style),
          Paragraph(f'<b>{rbi["val"]}</b> <font color="#{h(col_r)}">{arw_r}</font>', value_style),
-         Paragraph(rbi.get("detail", "Repo Rate (Asie ex-Chine)"), small_style),
+         Paragraph(rbi.get("detail", "Repo Rate"), small_style),
          Paragraph(rbi["prev"], small_style),
          Paragraph(rbi["source"], note_style)]]
     story += [std_table(rates_hdr, rows, rates_cw), Spacer(1, 4 * mm)]
@@ -613,10 +613,14 @@ def generate_pdf(data, output_path):
             ("Etats-Unis", "pib"): "gdp_usa",
             ("Zone Euro", "pib"):  "gdp_ez",
             ("Chine", "pib"):      "gdp_chine",
+            ("Bresil", "pib"):     "gdp_bresil",
+            ("Inde", "pib"):       "gdp_inde",
             ("France", "cpi"):     "cpi_fr",
             ("Etats-Unis", "cpi"): "cpi_usa",
             ("Zone Euro", "cpi"):  "cpi_ez",
             ("Chine", "cpi"):      "cpi_chine",
+            ("Bresil", "cpi"):     "cpi_bresil",
+            ("Inde", "cpi"):       "cpi_inde",
         }
         # 1. API
         key = api_keys.get((zone, kind))
@@ -624,7 +628,7 @@ def generate_pdf(data, output_path):
             v = data.get(key, {}).get("val", "N/D")
             if v and v != "N/D":
                 return v
-        # 2. Estimation Claude (utile pour Amerique latine, Asie ex-Chine, ou en repli)
+        # 2. Estimation Claude (en repli si la valeur API/web_search manque)
         claude_field = "pib_estime" if kind == "pib" else "cpi_estime"
         v_claude = claude_cycle.get(zone, {}).get(claude_field, "")
         if v_claude:
@@ -730,8 +734,8 @@ def generate_pdf(data, output_path):
     # ── 8. ALLOCATION ────────────────────────────────────────────────────────
     # CORRECTION : SCPI desormais incluse dans le dict icons
     alloc = data["claude_allocation"]
-    story += [sec_hdr("8  |  ALLOCATION RECOMMANDEE - ANALYSE HEXA"), Spacer(1, 2 * mm)]
-    alloc_hdr = ["Classe d'actif", "Recommandation HEXA"]
+    story += [sec_hdr("8  |  ALLOCATION RECOMMANDEE PAR CLASSE D'ACTIF"), Spacer(1, 2 * mm)]
+    alloc_hdr = ["Classe d'actif", "Recommandation"]
     alloc_cw = [38 * mm, 120 * mm]
     rows = []
     icons = {"actions": "Actions", "obligations": "Obligations",
@@ -1117,9 +1121,10 @@ def generate_pdf(data, output_path):
         Paragraph(
             "<b>Sources officielles :</b> INSEE - Eurostat (flash) - BEA - BLS - ECB SDW - "
             "Fed (FRED DFEDTARU / H.15) - S&P Global PMI / HCOB - CBOE - CNN Business - "
-            "Yahoo Finance - FRED - Banque de France - CAFPI - DVF / data.gouv.fr - "
-            "Notaires de France - Banque Mondiale - France Invest - Argos Mid-Market - "
-            "Bain PE Report - FMI WEO.",
+            "Yahoo Finance - FRED - Banque de France - Bundesbank - OCDE - CAFPI - Empruntis - "
+            "DVF / data.gouv.fr - MeilleursAgents - Notaires de France - Banque Mondiale - "
+            "France Invest - Argos Mid-Market - Bain PE Report - Preqin - FMI WEO - "
+            "ASPIM / IEIF - JLL / CBRE - BCB Copom - RBI MPC.",
             S("srcs", fontName="Helvetica", fontSize=5.5, textColor=GREY_TEXT, leading=8))]
 
     doc.build(story)
