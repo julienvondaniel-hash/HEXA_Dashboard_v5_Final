@@ -512,25 +512,26 @@ def fetch_worldbank(indicator, country_code):
 def fetch_emerging_zones():
     zones = {}
     # CORRECTION : codes WB valides
-    # LCN = Latin America & Caribbean
-    # EAS = East Asia & Pacific (aggregate)
-    print("    Amerique latine (LCN)...")
-    gdp_lac = fetch_worldbank("NY.GDP.MKTP.KD.ZG", "LCN")
-    cpi_lac = fetch_worldbank("FP.CPI.TOTL.ZG", "LCN")
-    zones["am_latine"] = {
-        "gdp": {**(gdp_lac or {"val": "N/D", "period": "N/D", "prev": "N/D", "prev_period": "N/D", "n1": "N/D", "n1_period": "N/D"}),
-                "source": "Banque Mondiale (LCN)" if gdp_lac else "Banque Mondiale (web_search en repli)"},
-        "cpi": {**(cpi_lac or {"val": "N/D", "period": "N/D", "prev": "N/D", "prev_period": "N/D", "n1": "N/D", "n1_period": "N/D"}),
-                "source": "Banque Mondiale (LCN)" if cpi_lac else "Banque Mondiale (web_search en repli)"},
+    # v6.5.6 : Bresil (BRA) et Inde (IND) au lieu des agregats regionaux LCN/EAS
+    # Les codes pays Banque Mondiale ont des donnees plus completes et fraiches
+    # que les agregats regionaux (qui renvoyaient souvent des listes vides).
+    print("    Bresil (BRA)...")
+    gdp_bra = fetch_worldbank("NY.GDP.MKTP.KD.ZG", "BRA")
+    cpi_bra = fetch_worldbank("FP.CPI.TOTL.ZG", "BRA")
+    zones["bresil"] = {
+        "gdp": {**(gdp_bra or {"val": "N/D", "period": "N/D", "prev": "N/D", "prev_period": "N/D", "n1": "N/D", "n1_period": "N/D"}),
+                "source": "Banque Mondiale (BRA)" if gdp_bra else "IBGE (web_search en repli)"},
+        "cpi": {**(cpi_bra or {"val": "N/D", "period": "N/D", "prev": "N/D", "prev_period": "N/D", "n1": "N/D", "n1_period": "N/D"}),
+                "source": "Banque Mondiale (BRA)" if cpi_bra else "IBGE (web_search en repli)"},
     }
-    print("    Asie ex-Chine (EAS)...")
-    gdp_asie = fetch_worldbank("NY.GDP.MKTP.KD.ZG", "EAS")
-    cpi_asie = fetch_worldbank("FP.CPI.TOTL.ZG", "EAS")
-    zones["asie_ex_chine"] = {
-        "gdp": {**(gdp_asie or {"val": "N/D", "period": "N/D", "prev": "N/D", "prev_period": "N/D", "n1": "N/D", "n1_period": "N/D"}),
-                "source": "Banque Mondiale (EAS)" if gdp_asie else "Banque Mondiale (web_search en repli)"},
-        "cpi": {**(cpi_asie or {"val": "N/D", "period": "N/D", "prev": "N/D", "prev_period": "N/D", "n1": "N/D", "n1_period": "N/D"}),
-                "source": "Banque Mondiale (EAS)" if cpi_asie else "Banque Mondiale (web_search en repli)"},
+    print("    Inde (IND)...")
+    gdp_ind = fetch_worldbank("NY.GDP.MKTP.KD.ZG", "IND")
+    cpi_ind = fetch_worldbank("FP.CPI.TOTL.ZG", "IND")
+    zones["inde"] = {
+        "gdp": {**(gdp_ind or {"val": "N/D", "period": "N/D", "prev": "N/D", "prev_period": "N/D", "n1": "N/D", "n1_period": "N/D"}),
+                "source": "Banque Mondiale (IND)" if gdp_ind else "MOSPI (web_search en repli)"},
+        "cpi": {**(cpi_ind or {"val": "N/D", "period": "N/D", "prev": "N/D", "prev_period": "N/D", "n1": "N/D", "n1_period": "N/D"}),
+                "source": "Banque Mondiale (IND)" if cpi_ind else "MOSPI (web_search en repli)"},
     }
     return zones
 
@@ -561,11 +562,12 @@ def collect_all():
     data["gdp_emergents"]={"val":"N/D","period":"N/D","prev":"N/D","prev_period":"N/D","n1":"N/D","n1_period":"N/D","source":"FMI WEO (web_search)"}
     data["cpi_chine"]    ={"val":"N/D","period":"N/D","prev":"N/D","prev_period":"N/D","n1":"N/D","n1_period":"N/D","source":"NBS (web_search)"}
     data["pboc"]         ={"val":"N/D","prev":"N/D","detail":"LPR 1 an","source":"PBoC (web_search)"}
-    # Nouvelles zones emergentes v6.5.2 : Amerique latine + Asie ex-Chine
-    data["gdp_latam"]         ={"val":"N/D","period":"N/D","prev":"N/D","prev_period":"N/D","n1":"N/D","n1_period":"N/D","source":"FMI WEO (web_search)"}
-    data["cpi_latam"]         ={"val":"N/D","period":"N/D","prev":"N/D","prev_period":"N/D","n1":"N/D","n1_period":"N/D","source":"FMI WEO (web_search)"}
-    data["gdp_asie_ex_chine"] ={"val":"N/D","period":"N/D","prev":"N/D","prev_period":"N/D","n1":"N/D","n1_period":"N/D","source":"FMI WEO (web_search)"}
-    data["cpi_asie_ex_chine"] ={"val":"N/D","period":"N/D","prev":"N/D","prev_period":"N/D","n1":"N/D","n1_period":"N/D","source":"FMI WEO (web_search)"}
+    # Nouvelles zones v6.5.6 : Bresil + Inde (donnees nationales mensuelles/trimestrielles)
+    # Nouvelles zones v6.5.6 : Bresil + Inde (donnees nationales fiables et mensuelles)
+    data["gdp_bresil"] ={"val":"N/D","period":"N/D","prev":"N/D","prev_period":"N/D","n1":"N/D","n1_period":"N/D","source":"IBGE (web_search)"}
+    data["cpi_bresil"] ={"val":"N/D","period":"N/D","prev":"N/D","prev_period":"N/D","n1":"N/D","n1_period":"N/D","source":"IBGE (web_search)"}
+    data["gdp_inde"]   ={"val":"N/D","period":"N/D","prev":"N/D","prev_period":"N/D","n1":"N/D","n1_period":"N/D","source":"MOSPI (web_search)"}
+    data["cpi_inde"]   ={"val":"N/D","period":"N/D","prev":"N/D","prev_period":"N/D","n1":"N/D","n1_period":"N/D","source":"MOSPI (web_search)"}
     # Taux directeurs emergents : Bresil (Selic) et Inde (RBI Repo)
     data["bcb_selic"] ={"val":"N/D","prev":"N/D","detail":"Taux Selic","source":"Banco Central do Brasil (web_search)"}
     data["rbi_repo"]  ={"val":"N/D","prev":"N/D","detail":"Repo Rate","source":"Reserve Bank of India (web_search)"}
@@ -574,8 +576,8 @@ def collect_all():
         "usa":          {"val":"N/D","period":"N/D","prev":"N/D","source":"S&P Global PMI"},
         "ez":           {"val":"N/D","period":"N/D","prev":"N/D","source":"HCOB / S&P Global PMI"},
         "chine":        {"val":"N/D","period":"N/D","prev":"N/D","source":"Caixin / S&P Global PMI"},
-        "latam":        {"val":"N/D","period":"N/D","prev":"N/D","source":"S&P Global PMI Bresil"},
-        "asie_ex_chine":{"val":"N/D","period":"N/D","prev":"N/D","source":"S&P Global PMI Inde"},
+        "bresil":       {"val":"N/D","period":"N/D","prev":"N/D","source":"S&P Global PMI Bresil"},
+        "inde":         {"val":"N/D","period":"N/D","prev":"N/D","source":"S&P Global PMI Inde"},
     }
     data["immobilier_taux"]={
         "taux_20ans":"N/D","taux_20ans_prev":"N/D","taux_20ans_n1":"N/D",
@@ -628,7 +630,18 @@ def collect_all():
         if idx: data["indices"][name]=idx; print(f"    {name} OK")
 
     print("  Zones emergentes...")
-    data["emerging_zones"]=fetch_emerging_zones()
+    ez = fetch_emerging_zones()
+    data["emerging_zones"] = ez
+    # v6.5.6 : cabler les resultats Banque Mondiale BRA/IND dans les cles utilisees par le PDF.
+    # Si la Banque Mondiale a renvoye une vraie valeur, on la prend ; sinon Claude web_search
+    # remplira via emerging_zones en Pass 1 (cascade IBGE/MOSPI/OCDE).
+    for zkey, dprefix, src_inst in [("bresil", "bresil", "IBGE"), ("inde", "inde", "MOSPI")]:
+        zgdp = ez.get(zkey, {}).get("gdp", {})
+        zcpi = ez.get(zkey, {}).get("cpi", {})
+        if zgdp.get("val", "N/D") not in ("N/D", "", None):
+            data[f"gdp_{dprefix}"].update(zgdp)
+        if zcpi.get("val", "N/D") not in ("N/D", "", None):
+            data[f"cpi_{dprefix}"].update(zcpi)
 
     data["immo_prix"]={}  # Rempli par Claude web_search
 
