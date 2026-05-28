@@ -17,7 +17,15 @@ import anthropic
 
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-5")
 PAUSE = int(os.environ.get("CLAUDE_PAUSE_SECONDS", "3"))
-MAX_SEARCH_ITERATIONS = int(os.environ.get("CLAUDE_MAX_ITER", "20"))
+# v6.5.7 : MAX_SEARCH_ITERATIONS abaisse de 20 a 12.
+# Au-dela de 12 iterations, Claude tourne en rond et risque de depasser
+# la fenetre de contexte de 200K tokens (cas observe en prod sur Pass 1 enrichie
+# avec multi-sources + A-1 + Bresil/Inde + emerging_zones).
+MAX_SEARCH_ITERATIONS = int(os.environ.get("CLAUDE_MAX_ITER", "12"))
+# v6.5.7 : garde-fou contexte. Au-dela de ~180K tokens cumules dans messages,
+# on sort proprement avec le dernier texte recu, pour eviter erreur 400 "prompt too long".
+# Anthropic compte ~4 chars/token : 180K tokens ~ 720K chars.
+MAX_CONTEXT_CHARS = int(os.environ.get("CLAUDE_MAX_CONTEXT_CHARS", "720000"))
 
 
 def extract_json(text: str) -> dict:
@@ -110,18 +118,42 @@ def call_with_search(client, prompt: str, max_tokens: int = 2000) -> str:
 
     Renvoie le dernier bloc texte trouve, meme en cas de truncation (max_tokens).
     Cela evite de perdre une reponse partielle exploitable.
+
+    v6.5.7 : garde-fou MAX_CONTEXT_CHARS pour eviter le depassement de la
+    fenetre de contexte de 200K tokens (erreur 400 'prompt too long').
     """
     tools = [{"type": "web_search_20250305", "name": "web_search"}]
     messages = [{"role": "user", "content": prompt}]
     last_text = ""
     tool_use_count = 0
     for it in range(MAX_SEARCH_ITERATIONS):
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=max_tokens,
-            tools=tools,
-            messages=messages,
-        )
+        # Garde-fou contexte (v6.5.7) : si l'historique cumule depasse le seuil,
+        # on sort avec ce qu'on a plutot que de provoquer un crash API.
+        # On approxime la taille par len(str(messages)) qui inclut les structures.
+        ctx_size = sum(len(str(m)) for m in messages)
+        if ctx_size > MAX_CONTEXT_CHARS:
+            print(f"  [WARN] Contexte cumule {ctx_size:,} chars (~{ctx_size//4:,} tokens) "
+                  f"depasse seuil {MAX_CONTEXT_CHARS:,}. Sortie anticipee a l'iteration {it+1}. "
+                  f"Texte recupere : {len(last_text)} chars.")
+            return last_text
+
+        try:
+            response = client.messages.create(
+                model=MODEL,
+                max_tokens=max_tokens,
+                tools=tools,
+                messages=messages,
+            )
+        except anthropic.BadRequestError as e:
+            # v6.5.7 : si le contexte depasse malgre le garde-fou (cas de bord),
+            # on renvoie ce qu'on a deja recupere plutot que de propager l'erreur
+            # et perdre toute la passe.
+            err_msg = str(e)
+            if "prompt is too long" in err_msg or "context" in err_msg.lower():
+                print(f"  [WARN] Contexte API depasse a l'iteration {it+1} : {err_msg[:120]}. "
+                      f"Texte recupere : {len(last_text)} chars.")
+                return last_text
+            raise  # Autre BadRequest : on laisse remonter
         # On capture tout texte present dans la reponse, quelle que soit le stop_reason
         for block in response.content:
             if hasattr(block, "text") and block.text:
