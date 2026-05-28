@@ -35,7 +35,7 @@ from typing import Dict, Any, Optional
 import anthropic
 
 
-MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-5")
+MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-7")
 # v7.0 : un seul appel, donc on peut etre genereux sur les iterations
 MAX_SEARCH_ITERATIONS = int(os.environ.get("CLAUDE_MAX_ITER", "15"))
 # Garde-fou contexte (~180K tokens)
@@ -92,63 +92,50 @@ def extract_json(text: str) -> dict:
         raise ValueError(f"JSON irreparable. Debut : {text[:200]}")
 
 
+def _concat_text(response) -> str:
+    """Concatene tous les blocs texte d'une reponse (le JSON peut etre
+    fragmente sur plusieurs blocs quand des recherches sont intercalees)."""
+    parts = []
+    for block in response.content:
+        if getattr(block, "type", None) == "text" and getattr(block, "text", ""):
+            parts.append(block.text)
+    return "".join(parts)
+
+
 def call_with_search(client, prompt: str, max_tokens: int = 8000) -> str:
-    """Boucle d'echange avec l'API + web_search.
-    Garde-fou contexte pour eviter le crash 200K tokens."""
-    tools = [{"type": "web_search_20250305", "name": "web_search"}]
+    """Un seul appel a l'API. web_search est un outil SERVER-SIDE : l'API
+    execute elle-meme les recherches et reinjecte les resultats sans qu'on
+    ait a gerer la boucle tool_use/tool_result cote client.
+
+    max_uses borne le nombre de recherches (contexte + cout).
+    """
+    tools = [{
+        "type": "web_search_20250305",
+        "name": "web_search",
+        "max_uses": MAX_SEARCH_ITERATIONS,
+    }]
     messages = [{"role": "user", "content": prompt}]
-    last_text = ""
-    tool_use_count = 0
-    for it in range(MAX_SEARCH_ITERATIONS):
-        # Garde-fou : si le contexte cumule depasse le seuil, on sort
-        ctx_size = sum(len(str(m)) for m in messages)
-        if ctx_size > MAX_CONTEXT_CHARS:
-            print(f"  [WARN] Contexte cumule {ctx_size:,} chars > seuil {MAX_CONTEXT_CHARS:,}. "
-                  f"Sortie a l'iteration {it+1}. Texte recupere : {len(last_text)} chars.", flush=True)
-            return last_text
 
-        try:
-            response = client.messages.create(
-                model=MODEL,
-                max_tokens=max_tokens,
-                tools=tools,
-                messages=messages,
-            )
-        except anthropic.BadRequestError as e:
-            err_msg = str(e)
-            if "prompt is too long" in err_msg or "context" in err_msg.lower():
-                print(f"  [WARN] Contexte API depasse a l'iteration {it+1}. "
-                      f"Texte recupere : {len(last_text)} chars.", flush=True)
-                return last_text
-            raise
+    try:
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=max_tokens,
+            tools=tools,
+            messages=messages,
+        )
+    except anthropic.BadRequestError as e:
+        print(f"  [WARN] BadRequestError : {e}", flush=True)
+        return ""
 
-        # Capture du dernier texte present (meme en cas de truncation)
-        for block in response.content:
-            if hasattr(block, "text") and block.text:
-                last_text = block.text
+    text = _concat_text(response)
 
-        if response.stop_reason == "end_turn":
-            return last_text
-        if response.stop_reason == "tool_use":
-            tool_use_count += sum(1 for b in response.content if b.type == "tool_use")
-            messages.append({"role": "assistant", "content": response.content})
-            tool_results = [
-                {"type": "tool_result", "tool_use_id": b.id, "content": "ok"}
-                for b in response.content if b.type == "tool_use"
-            ]
-            if tool_results:
-                messages.append({"role": "user", "content": tool_results})
-            continue
-        if response.stop_reason == "max_tokens":
-            print(f"  [WARN] max_tokens atteint a l'iteration {it+1}. "
-                  f"Texte recupere : {len(last_text)} chars.", flush=True)
-            return last_text
-        print(f"  [WARN] stop_reason inattendu : {response.stop_reason}", flush=True)
-        break
+    if response.stop_reason == "max_tokens":
+        print(f"  [WARN] max_tokens atteint. Texte recupere : {len(text)} chars.", flush=True)
+    elif response.stop_reason not in ("end_turn", "max_tokens"):
+        print(f"  [WARN] stop_reason inattendu : {response.stop_reason}. "
+              f"Texte recupere : {len(text)} chars.", flush=True)
 
-    print(f"  [WARN] Limite MAX_SEARCH_ITERATIONS={MAX_SEARCH_ITERATIONS} atteinte "
-          f"({tool_use_count} tool_use total). Texte recupere : {len(last_text)} chars.", flush=True)
-    return last_text
+    return text
 
 
 # ──────────────────────────────────────────────────────────────────────────
