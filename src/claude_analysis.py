@@ -292,19 +292,19 @@ def fetch_all_dynamic_data(client, mois: str, annee: int, data: dict) -> dict:
         '"usa":{"val":"","period":"","prev":"","source":""},'
         '"ez":{"val":"","period":"","prev":"","source":""},'
         '"chine":{"val":"","period":"","prev":"","source":""},'
-        '"latam":{"val":"","period":"","prev":"","source":""},'
-        '"asie_ex_chine":{"val":"","period":"","prev":"","source":""}},'
+        '"bresil":{"val":"","period":"","prev":"","source":""},'
+        '"inde":{"val":"","period":"","prev":"","source":""}},'
         '"chine":{"pib_val":"","pib_period":"","pib_prev":"","pib_prev_period":"",'
         '"cpi_val":"","cpi_period":"","cpi_prev":"","cpi_prev_period":"",'
         '"pboc_val":"","pboc_prev":"","pboc_detail":""},'
         '"cpi_flash":{"france_val":"","france_period":"","france_prev":"","france_source":"",'
         '"ez_val":"","ez_period":"","ez_prev":"","ez_source":""},'
-        # Nouvelles zones v6.5.2 : PIB + CPI + taux directeurs Latam (Bresil) et Asie ex-Chine (Inde)
+        # v6.5.6 : Bresil et Inde (donnees nationales) au lieu d'agregats regionaux
         '"emerging_zones":{'
-        '"latam":{"gdp_val":"","gdp_period":"","gdp_prev":"","gdp_prev_period":"",'
+        '"bresil":{"gdp_val":"","gdp_period":"","gdp_prev":"","gdp_prev_period":"",'
                   '"cpi_val":"","cpi_period":"","cpi_prev":"","cpi_prev_period":"","source":""},'
-        '"asie_ex_chine":{"gdp_val":"","gdp_period":"","gdp_prev":"","gdp_prev_period":"",'
-                         '"cpi_val":"","cpi_period":"","cpi_prev":"","cpi_prev_period":"","source":""},'
+        '"inde":{"gdp_val":"","gdp_period":"","gdp_prev":"","gdp_prev_period":"",'
+                 '"cpi_val":"","cpi_period":"","cpi_prev":"","cpi_prev_period":"","source":""},'
         '"bcb_selic":{"val":"","prev":"","detail":"","source":""},'
         '"rbi_repo":{"val":"","prev":"","detail":"","source":""}'
         '}'
@@ -317,10 +317,12 @@ def fetch_all_dynamic_data(client, mois: str, annee: int, data: dict) -> dict:
         '- NFP : nombre brut avec signe. Exemple : "+115000" ou "+115,000".\n'
         '- Periode PMI : TOUJOURS un mois ("Mai 2026"), JAMAIS un trimestre ("Q2 2026" ou "T2 2026"). '
         'Les PMI Composite sont des indicateurs mensuels.\n'
-        '- ZONES EMERGENTES (CRITIQUE) : pour "emerging_zones.latam" et "emerging_zones.asie_ex_chine", '
-        'remplir IMPERATIVEMENT gdp_val et cpi_val avec les agregats regionaux FMI WEO (rapport WEO d\'avril ou octobre le plus recent). '
-        'Exemple Latam : gdp_val="2.5%", gdp_period="2025", cpi_val="5.0%", cpi_period="2025". '
-        'Exemple Asie ex-Chine : gdp_val="4.5%", gdp_period="2025", cpi_val="2.3%", cpi_period="2025". '
+        '- BRESIL & INDE (CRITIQUE) : pour "emerging_zones.bresil" et "emerging_zones.inde", '
+        'remplir IMPERATIVEMENT gdp_val et cpi_val avec les donnees NATIONALES les plus recentes. '
+        'Bresil : PIB via IBGE (trimestriel), CPI via IBGE/IPCA. '
+        'Inde : PIB via MOSPI (trimestriel, annee fiscale), CPI via MOSPI/CPI Combined. '
+        'Exemple Bresil : gdp_val="2.5%", gdp_period="T1 2026", cpi_val="4.5%", cpi_period="Avril 2026". '
+        'Exemple Inde : gdp_val="6.5%", gdp_period="T4 2025-26", cpi_val="4.8%", cpi_period="Avril 2026". '
         'Ces valeurs sont obligatoires pour le rendu PDF.\n'
         '- VALEURS A-1 (CRITIQUE v6.5.4) : si "a1_fallback" est demande, pour chaque champ '
         '(ex. "France_PIB", "USA_CPI"), remplir avec la valeur du MEME indicateur il y a 12 mois '
@@ -329,13 +331,27 @@ def fetch_all_dynamic_data(client, mois: str, annee: int, data: dict) -> dict:
         'Exemple USA_CPI : val="2.3%", period="Avril 2025". '
         'Source : INSEE, Eurostat, BLS, BEA, NBS (revisions historiques). '
         'Si Claude ne trouve pas, laisser val="" et period="" (le PDF affichera N/D).\n'
+        '- STRATEGIE MULTI-SOURCES v6.5.5 (CRITIQUE) : pour chaque donnee manquante, '
+        'essaye les sources dans cet ordre :\n'
+        '  PIB / CPI nationaux : 1) institut national (INSEE/BLS/Eurostat/NBS) -> '
+        '2) OCDE Quarterly GDP / OCDE Inflation database -> 3) FMI WEO -> 4) Banque Mondiale -> 5) Reuters/Bloomberg news.\n'
+        '  PIB / CPI Bresil : 1) IBGE (institut bresilien) -> '
+        '2) OCDE Brazil -> 3) Banque Mondiale BRA -> 4) Trading Economics / Reuters.\n'
+        '  PIB / CPI Inde : 1) MOSPI (institut indien) -> '
+        '2) OCDE India -> 3) Banque Mondiale IND -> 4) RBI bulletins / Trading Economics.\n'
+        '  Si une source ne donne pas la valeur, essaye SYSTEMATIQUEMENT la suivante. '
+        'Inclure dans le champ "source" le nom de la source qui a fourni la donnee (ex: "IBGE T1 2026" ou "MOSPI Avril 2026").\n'
+        '- OBLIGATION (v6.5.6) : pour emerging_zones.bresil et emerging_zones.inde, '
+        'gdp_val et cpi_val DOIVENT etre remplis. Bresil et Inde publient des donnees mensuelles/trimestrielles regulieres.\n'
         f'Recherche : 1) PMI S&P Global/HCOB/Caixin {mois} {annee} (4 grandes zones, periode en MOIS) '
-        f'2) PIB CPI Chine {annee} '
+        f'2) PIB CPI Chine {annee} (NBS, puis OCDE Chine si NBS muet) '
         f'3) CPI flash France Zone Euro {mois} {annee} '
-        f'4) FMI WEO {annee} agregat Amerique latine et Caraibes : projection PIB et inflation annuelle '
-        f'5) FMI WEO {annee} agregat emerging Asia excluding China : projection PIB et inflation annuelle '
-        f'6) BCB Brasil Selic decision la plus recente + RBI India Repo Rate decision la plus recente '
-        f'7) Valeurs PIB et CPI historiques {annee - 1} (il y a 12 mois) pour France, USA, Zone Euro, Chine'
+        f'4) PIB Bresil {annee} : IBGE PIB trimestriel puis OCDE Brazil puis Banque Mondiale BRA '
+        f'5) PIB Inde {annee} : MOSPI GDP puis OCDE India puis Banque Mondiale IND '
+        f'6) CPI Bresil (IPCA) et Inde (CPI Combined) {mois} {annee} : memes cascades '
+        f'7) BCB Brasil Selic + RBI India Repo decisions recentes '
+        f'8) Valeurs PIB/CPI historiques {annee - 1} pour France/USA/ZE/Chine '
+        f'(INSEE Bank of France archives, BLS series historiques, Eurostat backdata, NBS archives, OCDE backdata)'
         + fallback_keys
     )
 
@@ -377,12 +393,19 @@ def fetch_all_dynamic_data(client, mois: str, annee: int, data: dict) -> dict:
         '"nb_ent":{"val":"","var":"","periode":""},'
         '"rdt":{"val":"","var":"","periode":""}}}\n'
         'Format : oat/bund avec %, spreads en bps (juste le nombre), argos avec x, dp en T$, montants en Md€.\n'
-        "Recherche : 1) Spread OAT/Bund 10 ans (Banque de France/Bundesbank) "
-        "2) Courbe US 2 ans / 10 ans "
-        "3) Spreads credit IG et HY (FRED BAMLC0A0CM / BAMLH0A0HYM2) "
-        f"4) Argos Mid-Market T1 {annee} "
-        f"5) France Invest {annee-1} (levees, invest, cessions, entreprises) "
-        f"6) Dry Powder PE mondial {annee} (Bain/Preqin)"
+        '- STRATEGIE MULTI-SOURCES v6.5.5 :\n'
+        '  OAT 10 ans France (val, prev, n1) : 1) Banque de France stats -> 2) FRED IRLTLT01FRM156N -> 3) Investing.com -> 4) ideal-investisseur.fr.\n'
+        '  Bund 10 ans Allemagne : 1) Bundesbank stats -> 2) FRED IRLTLT01DEM156N -> 3) Investing.com.\n'
+        '  Spreads IG / HY : 1) FRED BAMLC0A0CM/BAMLH0A0HYM2 -> 2) ICE BofA indices -> 3) Bloomberg news synthese.\n'
+        '  Argos Mid-Market : 1) Argos Wityu publications -> 2) Epsilon Research -> 3) Capital Finance news.\n'
+        '  France Invest stats : 1) france-invest.eu rapport -> 2) Les Echos PE chronique -> 3) AFIC archives.\n'
+        '  Dry Powder mondial : 1) Bain Global PE Report -> 2) Preqin Quarterly -> 3) PitchBook News.\n'
+        "Recherche : 1) Spread OAT/Bund 10 ans (Banque de France/Bundesbank, puis FRED, puis ideal-investisseur.fr) "
+        "2) Courbe US 2 ans / 10 ans (Yahoo Finance ^IRX/^TNX, puis Treasury direct) "
+        "3) Spreads credit IG et HY (FRED BAMLC0A0CM/BAMLH0A0HYM2, puis ICE BofA, puis Bloomberg synthese) "
+        f"4) Argos Mid-Market T1 {annee} (Argos Wityu site officiel, puis Epsilon Research) "
+        f"5) France Invest {annee-1} (france-invest.eu rapport annuel, puis Les Echos) "
+        f"6) Dry Powder PE mondial {annee} (Bain Global PE Report, puis Preqin)"
     )
 
     try:
@@ -435,11 +458,20 @@ def fetch_all_dynamic_data(client, mois: str, annee: int, data: dict) -> dict:
         f"(plus grosse collecte {annee} en position 1). "
         "Inclure le champ 'collecte' (ex : '450 M€', '320 M€'). "
         "Note doit etre courte (1 phrase max, ex : 'Sans frais d'entree, label ISR').\n"
-        f"Recherche : 1) Taux credit immo 20 ans France {mois} {annee} CAFPI "
-        "2) Bureaux vacants IDF CBRE JLL dernier trimestre "
-        "3) Prix m2 Paris Lyon Tassin-la-Demi-Lune Saint-Foy-les-Lyon Maisons-Laffitte Le Vesinet Chatou Saint-Germain-en-Laye "
-        f"4) SCPI marche France {annee} : TD moyen, collecte nette, decote secondaire, TOF, perfs par secteur "
-        f"5) Top 10 SCPI par collecte nette {annee} (ASPIM / MeilleuresSCPI / Pierrepapier classement)"
+        "Pour decote_secondaire : VALEUR EN POURCENTAGE (ex: '-20% a -30%'), PAS le montant des parts en attente.\n"
+        '- STRATEGIE MULTI-SOURCES v6.5.5 :\n'
+        '  Taux immo 20 ans (val, prev, n1) : 1) CAFPI barometre -> 2) Empruntis -> 3) MeilleursTaux -> 4) Banque de France.\n'
+        '  Bureaux IDF taux vacance : 1) JLL ParisOffices -> 2) CBRE France Office -> 3) Cushman Wakefield -> 4) BNP Paribas Real Estate.\n'
+        '  Surfaces commerciales prime : 1) JLL Retail -> 2) CBRE Retail -> 3) Cushman Wakefield.\n'
+        '  Prix immo par ville : 1) MeilleursAgents -> 2) SeLoger -> 3) DVF data.gouv.fr -> 4) Notaires de France.\n'
+        '  SCPI marche (TD, collecte, decote) : 1) ASPIM rapport mensuel -> 2) IEIF -> 3) MeilleuresSCPI.com -> 4) PrimaliaSCPI.\n'
+        '  SCPI top 10 collecte : 1) ASPIM classement -> 2) PierrePapier.fr -> 3) MeilleuresSCPI -> 4) Le Revenu / Les Echos PE.\n'
+        '  Si une source ne donne pas la valeur, essaye SYSTEMATIQUEMENT la suivante.\n'
+        f"Recherche : 1) Taux credit immo 20 ans France {mois} {annee} (CAFPI, puis Empruntis, puis MeilleursTaux) "
+        "2) Bureaux vacants IDF dernier trimestre (JLL, puis CBRE, puis Cushman Wakefield) "
+        "3) Prix m2 Paris Lyon Tassin-la-Demi-Lune Saint-Foy-les-Lyon Maisons-Laffitte Le Vesinet Chatou Saint-Germain-en-Laye (MeilleursAgents, puis SeLoger) "
+        f"4) SCPI marche France {annee} : TD moyen, collecte nette, decote secondaire EN POURCENTAGE (-20%/-30%, pas en Md€), TOF, perfs par secteur (ASPIM/IEIF) "
+        f"5) Top 10 SCPI par collecte nette {annee} (ASPIM classement officiel, puis PierrePapier.fr)"
     )
 
     try:
@@ -542,7 +574,7 @@ REGLES IMPORTANTES :
              USA PIB 2.0% + CPI 3.6% -> Surchauffe.
              Zone Euro PIB 0.1% + CPI 3.0% -> Stagflation.
 - Si une donnee est N/D, raisonne a partir du PMI et de l'inflation seuls.
-- Pour Amerique latine et Asie ex-Chine, utilise les estimations FMI WEO les plus recentes.
+- Pour Bresil et Inde, utilise les donnees nationales (IBGE, MOSPI) les plus recentes.
 - pib_estime et cpi_estime : TOUJOURS avec le symbole "%". Exemple "2.0%", "+5.0%", PAS juste "2.0".
 
 Reponds UNIQUEMENT avec ce JSON :
@@ -553,8 +585,8 @@ Reponds UNIQUEMENT avec ce JSON :
     "Etats-Unis":      {{"regime": "...", "commentaire": "...", "pib_estime": "X.X%", "cpi_estime": "X.X%"}},
     "Zone Euro":       {{"regime": "...", "commentaire": "...", "pib_estime": "X.X%", "cpi_estime": "X.X%"}},
     "Chine":           {{"regime": "...", "commentaire": "...", "pib_estime": "X.X%", "cpi_estime": "X.X%"}},
-    "Amerique latine": {{"regime": "...", "commentaire": "...", "pib_estime": "X.X%", "cpi_estime": "X.X%"}},
-    "Asie ex-Chine":   {{"regime": "...", "commentaire": "...", "pib_estime": "X.X%", "cpi_estime": "X.X%"}}
+    "Bresil":          {{"regime": "...", "commentaire": "...", "pib_estime": "X.X%", "cpi_estime": "X.X%"}},
+    "Inde":            {{"regime": "...", "commentaire": "...", "pib_estime": "X.X%", "cpi_estime": "X.X%"}}
   }},
   "points_vigilance": ["risque 1", "risque 2", "risque 3"],
   "opportunites":     ["opp 1", "opp 2", "opp 3"],
@@ -578,56 +610,56 @@ def _inject_dynamic(data: dict, dynamic: dict):
     if dynamic is None:
         dynamic = {}
 
-    # PMI (4 grandes zones + 2 nouvelles emergentes v6.5.2)
+    # PMI (4 grandes zones + Bresil et Inde v6.5.6)
     if "pmi" in dynamic:
-        for zone in ["france", "usa", "ez", "chine", "latam", "asie_ex_chine"]:
+        for zone in ["france", "usa", "ez", "chine", "bresil", "inde"]:
             if zone in dynamic["pmi"] and dynamic["pmi"][zone].get("val"):
                 data["pmi"].setdefault(zone, {"val":"N/D","period":"N/D","prev":"N/D","source":"S&P Global (web_search)"})
                 data["pmi"][zone].update(dynamic["pmi"][zone])
 
-    # Zones emergentes v6.5.2 : PIB / CPI Latam et Asie ex-Chine + taux directeurs
+    # Bresil et Inde v6.5.6 : PIB / CPI nationaux + taux directeurs
     # Aucun fallback chiffre : si Claude n'a pas trouve, on garde N/D explicite
     if "emerging_zones" in dynamic:
         ez_data = dynamic["emerging_zones"]
-        # Amerique latine
-        latam = ez_data.get("latam", {})
-        if latam.get("gdp_val"):
-            data["gdp_latam"] = {
-                "val":         _ensure_pct(latam["gdp_val"]),
-                "period":      latam.get("gdp_period", "N/D"),
-                "prev":        _ensure_pct(latam.get("gdp_prev", "N/D")),
-                "prev_period": latam.get("gdp_prev_period", "N/D"),
+        # Bresil
+        bresil = ez_data.get("bresil", {})
+        if bresil.get("gdp_val"):
+            data["gdp_bresil"] = {
+                "val":         _ensure_pct(bresil["gdp_val"]),
+                "period":      bresil.get("gdp_period", "N/D"),
+                "prev":        _ensure_pct(bresil.get("gdp_prev", "N/D")),
+                "prev_period": bresil.get("gdp_prev_period", "N/D"),
                 "n1":          "N/D", "n1_period": "N/D",
-                "source":      latam.get("source", "FMI WEO (web_search)"),
+                "source":      bresil.get("source", "IBGE (web_search)"),
             }
-        if latam.get("cpi_val"):
-            data["cpi_latam"] = {
-                "val":         _ensure_pct(latam["cpi_val"]),
-                "period":      latam.get("cpi_period", "N/D"),
-                "prev":        _ensure_pct(latam.get("cpi_prev", "N/D")),
-                "prev_period": latam.get("cpi_prev_period", "N/D"),
+        if bresil.get("cpi_val"):
+            data["cpi_bresil"] = {
+                "val":         _ensure_pct(bresil["cpi_val"]),
+                "period":      bresil.get("cpi_period", "N/D"),
+                "prev":        _ensure_pct(bresil.get("cpi_prev", "N/D")),
+                "prev_period": bresil.get("cpi_prev_period", "N/D"),
                 "n1":          "N/D", "n1_period": "N/D",
-                "source":      latam.get("source", "FMI WEO (web_search)"),
+                "source":      bresil.get("source", "IBGE (web_search)"),
             }
-        # Asie ex-Chine
-        asie = ez_data.get("asie_ex_chine", {})
-        if asie.get("gdp_val"):
-            data["gdp_asie_ex_chine"] = {
-                "val":         _ensure_pct(asie["gdp_val"]),
-                "period":      asie.get("gdp_period", "N/D"),
-                "prev":        _ensure_pct(asie.get("gdp_prev", "N/D")),
-                "prev_period": asie.get("gdp_prev_period", "N/D"),
+        # Inde
+        inde = ez_data.get("inde", {})
+        if inde.get("gdp_val"):
+            data["gdp_inde"] = {
+                "val":         _ensure_pct(inde["gdp_val"]),
+                "period":      inde.get("gdp_period", "N/D"),
+                "prev":        _ensure_pct(inde.get("gdp_prev", "N/D")),
+                "prev_period": inde.get("gdp_prev_period", "N/D"),
                 "n1":          "N/D", "n1_period": "N/D",
-                "source":      asie.get("source", "FMI WEO (web_search)"),
+                "source":      inde.get("source", "MOSPI (web_search)"),
             }
-        if asie.get("cpi_val"):
-            data["cpi_asie_ex_chine"] = {
-                "val":         _ensure_pct(asie["cpi_val"]),
-                "period":      asie.get("cpi_period", "N/D"),
-                "prev":        _ensure_pct(asie.get("cpi_prev", "N/D")),
-                "prev_period": asie.get("cpi_prev_period", "N/D"),
+        if inde.get("cpi_val"):
+            data["cpi_inde"] = {
+                "val":         _ensure_pct(inde["cpi_val"]),
+                "period":      inde.get("cpi_period", "N/D"),
+                "prev":        _ensure_pct(inde.get("cpi_prev", "N/D")),
+                "prev_period": inde.get("cpi_prev_period", "N/D"),
                 "n1":          "N/D", "n1_period": "N/D",
-                "source":      asie.get("source", "FMI WEO (web_search)"),
+                "source":      inde.get("source", "MOSPI (web_search)"),
             }
         # Taux directeurs emergents
         bcb = ez_data.get("bcb_selic", {})
@@ -872,8 +904,8 @@ def _diagnostic_log(data: dict):
     """
     print("  --- Diagnostic post-injection ---")
     critical = {
-        "PIB Latam (P1)":         data.get("gdp_latam", {}).get("val", "N/D"),
-        "PIB Asie ex-Chine (P1)": data.get("gdp_asie_ex_chine", {}).get("val", "N/D"),
+        "PIB Bresil (P1)":        data.get("gdp_bresil", {}).get("val", "N/D"),
+        "PIB Inde (P1)":          data.get("gdp_inde", {}).get("val", "N/D"),
         "BCB Selic Bresil (P1)":  data.get("bcb_selic", {}).get("val", "N/D"),
         "RBI Repo Inde (P1)":     data.get("rbi_repo", {}).get("val", "N/D"),
         "Spread OAT/Bund (P2)":   data.get("spread", {}).get("spread", "N/D"),
@@ -905,17 +937,17 @@ def _final_format_sweep(data: dict):
     garantit que tous les champs PIB / CPI / taux directeurs portent bien le symbole %.
     Couvre les cas ou une source (API ou web_search) renvoie un nombre nu comme "0.0".
     """
-    # PIB : val, prev, n1 pour chaque zone (incluant zones emergentes v6.5.2)
+    # PIB : val, prev, n1 pour chaque zone (incluant Bresil et Inde v6.5.6)
     for key in ("gdp_fr", "gdp_usa", "gdp_ez", "gdp_chine", "gdp_emergents",
-                "gdp_latam", "gdp_asie_ex_chine"):
+                "gdp_bresil", "gdp_inde"):
         d = data.get(key)
         if isinstance(d, dict):
             for fld in ("val", "prev", "n1"):
                 if fld in d:
                     d[fld] = _ensure_pct(d[fld])
-    # CPI : val, prev, n1 pour chaque zone (incluant zones emergentes v6.5.2)
+    # CPI : val, prev, n1 pour chaque zone (incluant Bresil et Inde v6.5.6)
     for key in ("cpi_fr", "cpi_usa", "cpi_ez", "cpi_chine",
-                "cpi_latam", "cpi_asie_ex_chine"):
+                "cpi_bresil", "cpi_inde"):
         d = data.get(key)
         if isinstance(d, dict):
             for fld in ("val", "prev", "n1"):
@@ -985,7 +1017,7 @@ def _fallback_analysis(data: dict) -> dict:
         "analyse_cycle": {z: {"regime": "N/D", "commentaire": "Analyse indisponible.",
                               "pib_estime": "N/D", "cpi_estime": "N/D"}
                           for z in ["France", "Etats-Unis", "Zone Euro", "Chine",
-                                    "Amerique latine", "Asie ex-Chine"]},
+                                    "Bresil", "Inde"]},
         "points_vigilance": ["API Claude indisponible."],
         "opportunites": ["API Claude indisponible."],
         "allocation_recommandee": {k: "N/D" for k in
