@@ -462,6 +462,12 @@ def fetch_spread_oat_bund() -> Optional[Dict[str, Any]]:
             "spread": f"{spread:.0f}",
             "spread_prev": f"{spread_prev:.0f}" if spread_prev is not None else "N/D",
             "oat": oat["val"],
+            # Prec. / A-1 OAT 10 ans deja recuperes par FRED (gratuit) : on les
+            # expose pour la Section 11 (auparavant codes en dur "N/D" cote PDF).
+            "oat_prev": oat.get("prev", "N/D"),
+            "oat_prev_period": oat.get("prev_period", "N/D"),
+            "oat_n1": oat.get("n1", "N/D"),
+            "oat_n1_period": oat.get("n1_period", "N/D"),
             "bund": bund["val"],
             "source": "FRED (OECD long-term rates)",
         }
@@ -515,11 +521,16 @@ def fetch_us_curve() -> Optional[Dict[str, Any]]:
         t10_v = float(t10["val"].rstrip("%"))
         spread = t10_v - t2_v
         signal = "Normal" if spread > 0 else "Inverse"
+        # spread_prev : reconstruit a partir des valeurs precedentes DGS2/DGS10
+        # deja renvoyees gratuitement par FRED (auparavant ignorees -> "N/D").
+        spread_prev = "N/D"
+        if t2.get("prev", "N/D") != "N/D" and t10.get("prev", "N/D") != "N/D":
+            spread_prev = f"{float(t10['prev'].rstrip('%')) - float(t2['prev'].rstrip('%')):.2f}"
         return {
             "us_2y": t2["val"],
             "us_10y": t10["val"],
             "spread": f"{spread:.2f}",
-            "spread_prev": "N/D",
+            "spread_prev": spread_prev,
             "signal": signal,
             "source": "FRED (US Treasury)",
         }
@@ -834,8 +845,10 @@ def collect_all() -> Dict[str, Any]:
     print("\n[5/8] Spreads et courbe...", flush=True)
     print("  Spread OAT/Bund (FRED OECD)...", flush=True)
     data["spread"] = fetch_spread_oat_bund() or {
-        "spread": "N/D", "spread_prev": "N/D", "oat": "N/D", "bund": "N/D",
-        "source": "FRED (indisponible)",
+        "spread": "N/D", "spread_prev": "N/D", "oat": "N/D",
+        "oat_prev": "N/D", "oat_prev_period": "N/D",
+        "oat_n1": "N/D", "oat_n1_period": "N/D",
+        "bund": "N/D", "source": "FRED (indisponible)",
     }
     print("  Courbe US 2/10 ans (FRED)...", flush=True)
     data["spread_us_curve"] = fetch_us_curve() or {
