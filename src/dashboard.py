@@ -206,9 +206,22 @@ def fetch_bls_cpi() -> Optional[Dict[str, Any]]:
         if not series or not series[0].get("data"):
             return None
         data_pts = series[0]["data"]  # plus recent en premier
-        # Index par (year, periodMM)
-        idx = {(p["year"], p["period"][1:]): float(p["value"]) for p in data_pts
-               if p.get("period", "").startswith("M") and p.get("value")}
+
+        def _to_float(s):
+            try:
+                return float(str(s).replace(",", "").strip())
+            except (ValueError, AttributeError):
+                return None
+
+        # Index par (year, periodMM), en ignorant les valeurs non numeriques ('-', '', etc.)
+        idx = {}
+        for p in data_pts:
+            if not p.get("period", "").startswith("M"):
+                continue
+            fv = _to_float(p.get("value"))
+            if fv is None:
+                continue
+            idx[(p["year"], p["period"][1:])] = fv
         if not idx:
             return None
         # Trouver les periodes les plus recentes
@@ -294,8 +307,10 @@ def fetch_wb(indicator: str, country: str, label_source: str = None) -> Optional
 # Codes verifies : transformation "Growth rate same period previous year" (GY).
 # PIB  : [PAYS]GDPRQPSMEI  (real GDP, glissement annuel, trimestriel)
 # CPI  : [PAYS]CPIALLMINMEI (CPI total, glissement annuel, mensuel)
+# CPI  : CPALTT01[XX]M659N  (CPI total, transformation OCDE "GY" = glissement annuel %)
+#        NB : ne PAS utiliser ...CPIALLMINMEI (niveau d'indice) ni ...M657N (var. mensuelle).
 _FRED_GDP_EMERGENTS = {"CHN": "CHNGDPRQPSMEI", "BRA": "BRAGDPRQPSMEI", "IND": "INDGDPRQPSMEI"}
-_FRED_CPI_EMERGENTS = {"CHN": "CHNCPIALLMINMEI", "BRA": "BRACPIALLMINMEI", "IND": "INDCPIALLMINMEI"}
+_FRED_CPI_EMERGENTS = {"CHN": "CPALTT01CNM659N", "BRA": "CPALTT01BRM659N", "IND": "CPALTT01INM659N"}
 _WB_NAME = {"CHN": "Chine", "BRA": "Bresil", "IND": "Inde"}
 
 
@@ -304,7 +319,7 @@ def fetch_gdp_emergent(country: str) -> Dict[str, Any]:
     1) FRED/OCDE (trimestriel, recent)  2) Banque Mondiale (annuel, retarde)."""
     fred_id = _FRED_GDP_EMERGENTS.get(country)
     if fred_id:
-        res = fetch_fred(fred_id, as_quarterly_gdp=True,
+        res = fetch_fred(fred_id, as_quarterly_gdp=True, max_abs=25.0,
                          source_label=f"OCDE via FRED ({fred_id})")
         if res:
             return res
@@ -317,7 +332,7 @@ def fetch_cpi_emergent(country: str) -> Dict[str, Any]:
     1) FRED/OCDE (mensuel, recent)  2) Banque Mondiale (annuel, retarde)."""
     fred_id = _FRED_CPI_EMERGENTS.get(country)
     if fred_id:
-        res = fetch_fred(fred_id, source_label=f"OCDE via FRED ({fred_id})")
+        res = fetch_fred(fred_id, max_abs=50.0, source_label=f"OCDE via FRED ({fred_id})")
         if res:
             return res
         print(f"    CPI {_WB_NAME.get(country, country)} : FRED indisponible, repli Banque Mondiale.", flush=True)
@@ -329,9 +344,13 @@ def fetch_cpi_emergent(country: str) -> Dict[str, Any]:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def fetch_fred(series: str, as_quarterly_gdp: bool = False,
-               source_label: str = None) -> Optional[Dict[str, Any]]:
+               source_label: str = None, max_abs: float = None) -> Optional[Dict[str, Any]]:
     """Recuperation generique d'une serie FRED via l'API publique (sans cle pour CSV).
-    Endpoint CSV qui ne necessite pas de cle API et est tres stable."""
+    Endpoint CSV qui ne necessite pas de cle API et est tres stable.
+
+    max_abs : garde-fou de plausibilite. Si |derniere valeur| > max_abs, la serie
+    est rejetee (retourne None). Protege contre une mauvaise serie renvoyant un
+    niveau d'indice (ex. 115) la ou on attend un taux (ex. 2%)."""
     url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series}"
     r = _get(url, timeout=TIMEOUT)
     if not r:
@@ -358,6 +377,12 @@ def fetch_fred(series: str, as_quarterly_gdp: bool = False,
         data_pts.sort(key=lambda x: x[0], reverse=True)
         latest = data_pts[0]
         prev = data_pts[1] if len(data_pts) > 1 else None
+
+        # Garde-fou plausibilite : rejette une serie aux mauvaises unites
+        if max_abs is not None and abs(latest[1]) > max_abs:
+            print(f"    FRED {series} : valeur {latest[1]} hors borne +/-{max_abs} "
+                  f"(mauvaise serie ?). Rejet.", flush=True)
+            return None
 
         # Pour A-1 : trouver une obs ~12 mois avant
         latest_yr = int(latest[0][:4])
@@ -555,9 +580,22 @@ def fetch_vix() -> Optional[Dict[str, Any]]:
 
 
 def fetch_fear_greed() -> Optional[Dict[str, Any]]:
-    """Index Fear & Greed via l'API CNN non documentee (lecture seule, publique)."""
+    """Index Fear & Greed via l'API CNN non documentee (lecture seule, publique).
+    CNN renvoie 418 sans un jeu d'en-tetes navigateur complet (anti-bot)."""
     url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
-    r = _get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
+    cnn_headers = {
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/124.0.0.0 Safari/537.36"),
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://edition.cnn.com/markets/fear-and-greed",
+        "Origin": "https://edition.cnn.com",
+        "Sec-Fetch-Site": "same-site",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Dest": "empty",
+    }
+    r = _get(url, timeout=30, headers=cnn_headers)
     if not r:
         return None
     try:
