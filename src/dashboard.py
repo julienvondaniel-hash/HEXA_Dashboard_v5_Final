@@ -290,6 +290,40 @@ def fetch_wb(indicator: str, country: str, label_source: str = None) -> Optional
         return None
 
 
+# ── Series OCDE (via FRED) pour pays emergents : PIB a/a trimestriel et CPI a/a mensuel
+# Codes verifies : transformation "Growth rate same period previous year" (GY).
+# PIB  : [PAYS]GDPRQPSMEI  (real GDP, glissement annuel, trimestriel)
+# CPI  : [PAYS]CPIALLMINMEI (CPI total, glissement annuel, mensuel)
+_FRED_GDP_EMERGENTS = {"CHN": "CHNGDPRQPSMEI", "BRA": "BRAGDPRQPSMEI", "IND": "INDGDPRQPSMEI"}
+_FRED_CPI_EMERGENTS = {"CHN": "CHNCPIALLMINMEI", "BRA": "BRACPIALLMINMEI", "IND": "INDCPIALLMINMEI"}
+_WB_NAME = {"CHN": "Chine", "BRA": "Bresil", "IND": "Inde"}
+
+
+def fetch_gdp_emergent(country: str) -> Dict[str, Any]:
+    """PIB a/a pour pays emergent. Chaine de repli :
+    1) FRED/OCDE (trimestriel, recent)  2) Banque Mondiale (annuel, retarde)."""
+    fred_id = _FRED_GDP_EMERGENTS.get(country)
+    if fred_id:
+        res = fetch_fred(fred_id, as_quarterly_gdp=True,
+                         source_label=f"OCDE via FRED ({fred_id})")
+        if res:
+            return res
+        print(f"    PIB {_WB_NAME.get(country, country)} : FRED indisponible, repli Banque Mondiale.", flush=True)
+    return fetch_wb("NY.GDP.MKTP.KD.ZG", country) or _nd_gdp("Banque Mondiale (indisponible)")
+
+
+def fetch_cpi_emergent(country: str) -> Dict[str, Any]:
+    """CPI a/a pour pays emergent. Chaine de repli :
+    1) FRED/OCDE (mensuel, recent)  2) Banque Mondiale (annuel, retarde)."""
+    fred_id = _FRED_CPI_EMERGENTS.get(country)
+    if fred_id:
+        res = fetch_fred(fred_id, source_label=f"OCDE via FRED ({fred_id})")
+        if res:
+            return res
+        print(f"    CPI {_WB_NAME.get(country, country)} : FRED indisponible, repli Banque Mondiale.", flush=True)
+    return fetch_wb("FP.CPI.TOTL.ZG", country) or _nd_cpi("Banque Mondiale (indisponible)")
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # SECTION 2 : TAUX DIRECTEURS
 # ═══════════════════════════════════════════════════════════════════════════
@@ -697,12 +731,12 @@ def collect_all() -> Dict[str, Any]:
     data["gdp_ez"] = fetch_eurostat_gdp("EA20") or _nd_gdp("Eurostat (indisponible)")
     print("  PIB Etats-Unis (FRED A191RL1Q225SBEA)...", flush=True)
     data["gdp_usa"] = fetch_bea_gdp() or _nd_gdp("FRED BEA (indisponible)")
-    print("  PIB Chine (Banque Mondiale)...", flush=True)
-    data["gdp_chine"] = fetch_wb("NY.GDP.MKTP.KD.ZG", "CHN") or _nd_gdp("Banque Mondiale (indisponible)")
-    print("  PIB Bresil (Banque Mondiale)...", flush=True)
-    data["gdp_bresil"] = fetch_wb("NY.GDP.MKTP.KD.ZG", "BRA") or _nd_gdp("Banque Mondiale (indisponible)")
-    print("  PIB Inde (Banque Mondiale)...", flush=True)
-    data["gdp_inde"] = fetch_wb("NY.GDP.MKTP.KD.ZG", "IND") or _nd_gdp("Banque Mondiale (indisponible)")
+    print("  PIB Chine (FRED/OCDE, repli Banque Mondiale)...", flush=True)
+    data["gdp_chine"] = fetch_gdp_emergent("CHN")
+    print("  PIB Bresil (FRED/OCDE, repli Banque Mondiale)...", flush=True)
+    data["gdp_bresil"] = fetch_gdp_emergent("BRA")
+    print("  PIB Inde (FRED/OCDE, repli Banque Mondiale)...", flush=True)
+    data["gdp_inde"] = fetch_gdp_emergent("IND")
     data["gdp_emergents"] = _nd_gdp("Non utilise depuis v6.5.6")
 
     # ─── CPI ──────────────────────────────────────────────────────────────
@@ -713,12 +747,12 @@ def collect_all() -> Dict[str, Any]:
     data["cpi_ez"] = fetch_eurostat_cpi("EA20") or _nd_cpi("Eurostat (indisponible)")
     print("  CPI Etats-Unis (BLS)...", flush=True)
     data["cpi_usa"] = fetch_bls_cpi() or _nd_cpi("BLS (indisponible)")
-    print("  CPI Chine (Banque Mondiale)...", flush=True)
-    data["cpi_chine"] = fetch_wb("FP.CPI.TOTL.ZG", "CHN") or _nd_cpi("Banque Mondiale (indisponible)")
-    print("  CPI Bresil (Banque Mondiale)...", flush=True)
-    data["cpi_bresil"] = fetch_wb("FP.CPI.TOTL.ZG", "BRA") or _nd_cpi("Banque Mondiale (indisponible)")
-    print("  CPI Inde (Banque Mondiale)...", flush=True)
-    data["cpi_inde"] = fetch_wb("FP.CPI.TOTL.ZG", "IND") or _nd_cpi("Banque Mondiale (indisponible)")
+    print("  CPI Chine (FRED/OCDE, repli Banque Mondiale)...", flush=True)
+    data["cpi_chine"] = fetch_cpi_emergent("CHN")
+    print("  CPI Bresil (FRED/OCDE, repli Banque Mondiale)...", flush=True)
+    data["cpi_bresil"] = fetch_cpi_emergent("BRA")
+    print("  CPI Inde (FRED/OCDE, repli Banque Mondiale)...", flush=True)
+    data["cpi_inde"] = fetch_cpi_emergent("IND")
 
     # ─── Taux directeurs ──────────────────────────────────────────────────
     print("\n[3/8] Taux directeurs...", flush=True)
