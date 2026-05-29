@@ -208,9 +208,20 @@ complete. Tout doit etre dans UN SEUL bloc JSON en sortie.
 
 DONNEES A RECUPERER VIA WEB_SEARCH
 ==================================
+0. PIB et inflation des pays emergents (donnees OFFICIELLES les plus recentes), car
+   les APIs structurees sont trop retardees pour ces pays :
+   - Chine : croissance PIB a/a (dernier trimestre, NBS) + CPI a/a (dernier mois, NBS).
+   - Bresil : croissance PIB a/a (dernier trimestre, IBGE) + IPCA a/a (dernier mois, IBGE).
+   - Inde : croissance PIB a/a (dernier trimestre, MoSPI) + CPI a/a (dernier mois, MoSPI).
+   Format : pourcentage avec signe pour le PIB (ex "+5.4%"), avec periode (ex "T1 2026"
+   pour le PIB, "Avr 2026" pour le CPI). Ces valeurs DOIVENT etre coherentes avec celles
+   que tu reutiliseras dans claude_cycle (section 14).
+
 1. PMI Composite {mois} pour 6 zones (S&P Global / HCOB / Caixin) :
    France, Zone Euro, Etats-Unis, Chine, Bresil, Inde.
    Format : nombre seul (ex "48.9"), periode = mois (ex "Mai 2026").
+   IMPORTANT : ne JAMAIS laisser un PMI vide. Si tu ne trouves pas le mois exact,
+   prends le mois disponible le plus recent et indique-le dans "period".
 
 2. Taux directeurs des banques centrales emergentes (decision la plus recente) :
    - PBoC (Chine) : LPR 1 an. Source : PBoC.
@@ -240,6 +251,9 @@ DONNEES A RECUPERER VIA WEB_SEARCH
     Paris, Lyon, Tassin-la-Demi-Lune, Saint-Foy-les-Lyon,
     Maisons-Laffitte, Le Vesinet, Chatou, Saint-Germain-en-Laye.
     Pour chaque : prix actuel €/m2, variation 1 an %, variation 5 ans %.
+    IMPORTANT : remplis ces 8 villes meme avec une estimation MeilleursAgents/SeLoger
+    recente ; ne laisse PAS cette section vide. Si une ville precise manque, utilise
+    la donnee de prix au m2 la plus recente disponible pour cette commune.
 
 11. SCPI marche France {annee} :
     - TD moyen marche (% annuel)
@@ -281,6 +295,14 @@ FORMAT DE SORTIE
 Reponds UNIQUEMENT avec ce JSON unique (pas de texte avant ou apres) :
 
 {{
+  "emergents": {{
+    "gdp_chine":  {{"val":"","period":"","source":"NBS"}},
+    "gdp_bresil": {{"val":"","period":"","source":"IBGE"}},
+    "gdp_inde":   {{"val":"","period":"","source":"MoSPI"}},
+    "cpi_chine":  {{"val":"","period":"","source":"NBS"}},
+    "cpi_bresil": {{"val":"","period":"","source":"IBGE"}},
+    "cpi_inde":   {{"val":"","period":"","source":"MoSPI"}}
+  }},
   "pmi": {{
     "france": {{"val":"","period":"","prev":"","source":""}},
     "ez":     {{"val":"","period":"","prev":"","source":""}},
@@ -362,8 +384,15 @@ REGLES DE FORMAT
 - Spreads : nombre seul SANS bps (juste "69").
 - Decote secondaire : EN POURCENTAGE (ex: "-20% a -30%").
 - scpi_top10 : exactement 10 SCPI, classees par collecte decroissante.
+- COHERENCE OBLIGATOIRE : dans claude_cycle, "pib_estime" et "cpi_estime" de chaque zone
+  DOIVENT reprendre exactement les valeurs PIB/CPI affichees ailleurs dans le rapport :
+  France/Zone Euro/USA depuis les donnees API fournies en haut de ce prompt ;
+  Chine/Bresil/Inde depuis le bloc "emergents" que tu viens de remplir.
+  N'invente JAMAIS un chiffre d'inflation ou de croissance different dans les commentaires.
+- Le "regime" de chaque zone doit etre coherent avec ces deux chiffres et les seuils donnes.
 - Si une donnee est INTROUVABLE apres recherche, mets val="" (vide). Le PDF affichera N/D.
-- AUCUNE valeur inventee : si tu ne trouves pas, vide.
+- AUCUNE valeur inventee : si tu ne trouves pas, vide. EXCEPTION : PMI et prix immo,
+  pour lesquels tu prends la donnee recente la plus proche plutot que de laisser vide.
 - Reponds en francais.
 """
 
@@ -374,6 +403,41 @@ REGLES DE FORMAT
 
 def _inject_into_data(data: Dict[str, Any], parsed: Dict[str, Any]) -> None:
     """Injecte le JSON produit par Claude dans la structure data attendue par le PDF."""
+
+    # PIB / CPI pays emergents : web_search (recent) prioritaire sur l'API (retardee).
+    # On ne remplace que si Claude a fourni une valeur ET que l'API est vide/retardee.
+    if "emergents" in parsed:
+        em = parsed["emergents"]
+        _mapping = {
+            "gdp_chine": "gdp_chine", "gdp_bresil": "gdp_bresil", "gdp_inde": "gdp_inde",
+            "cpi_chine": "cpi_chine", "cpi_bresil": "cpi_bresil", "cpi_inde": "cpi_inde",
+        }
+        for src_key, data_key in _mapping.items():
+            block = em.get(src_key, {})
+            val = (block.get("val") or "").strip()
+            if not val:
+                continue
+            api_block = data.get(data_key, {}) or {}
+            api_src = str(api_block.get("source", ""))
+            api_period = str(api_block.get("period", ""))
+            api_val = str(api_block.get("val", ""))
+            # On prefere web_search si l'API a echoue (N/D), vient de la Banque Mondiale
+            # (annuelle/retardee), ou n'a pas de periode trimestrielle/mensuelle 2026.
+            api_is_stale = (
+                api_val in ("", "N/D")
+                or "Banque Mondiale" in api_src
+                or "2024" in api_period or "2025" in api_period
+            )
+            if api_is_stale:
+                data[data_key] = {
+                    "val": _ensure_pct(val),
+                    "period": block.get("period", "N/D"),
+                    "prev": api_block.get("prev", "N/D"),
+                    "prev_period": api_block.get("prev_period", "N/D"),
+                    "n1": api_block.get("n1", "N/D"),
+                    "n1_period": api_block.get("n1_period", "N/D"),
+                    "source": block.get("source", "Source nationale (web)"),
+                }
 
     # PMI
     if "pmi" in parsed:
@@ -534,6 +598,12 @@ def _diagnostic_log(data: Dict[str, Any]) -> None:
     """Log un resume des donnees collectees pour faciliter le debug."""
     print("\n  --- Diagnostic post-injection ---", flush=True)
     checks = [
+        ("PIB Chine",       data.get("gdp_chine", {}).get("val")),
+        ("PIB Bresil",      data.get("gdp_bresil", {}).get("val")),
+        ("PIB Inde",        data.get("gdp_inde", {}).get("val")),
+        ("CPI Chine",       data.get("cpi_chine", {}).get("val")),
+        ("CPI Bresil",      data.get("cpi_bresil", {}).get("val")),
+        ("CPI Inde",        data.get("cpi_inde", {}).get("val")),
         ("PMI France",      data.get("pmi", {}).get("france", {}).get("val")),
         ("PMI USA",         data.get("pmi", {}).get("usa", {}).get("val")),
         ("PMI Zone Euro",   data.get("pmi", {}).get("ez", {}).get("val")),
